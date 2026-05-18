@@ -1,0 +1,3 @@
+# Phase 3 deliverable placeholder.
+# Recipes (usb_c, ntc_thermistor, screw_terminal) land in Phase 3.
+# Tests referencing this file should pytest.skip().

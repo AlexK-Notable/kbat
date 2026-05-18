@@ -1,0 +1,42 @@
+[project]
+name = "kbat"
+version = "0.1.0.dev0"
+description = "Declarative manifest-driven KiCad schematic/PCB batch transforms"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "typer>=0.12",
+    "kicad-sch-api~=0.5.6",
+    "pyyaml>=6.0",
+    "sexpdata>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.100",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+kbat = "kbat.cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Vendored upstream fixtures are not project source — exempt from lint.
+extend-exclude = ["tests/fixtures/validation_gate/cleanup.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+markers = [
+    "gate: validation gate criteria 1.G.a-d (~60s; required for merge)",
+]

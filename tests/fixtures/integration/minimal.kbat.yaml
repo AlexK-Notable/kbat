@@ -1,0 +1,16 @@
+apiVersion: kbat.dev/v1alpha1
+kind: Project
+metadata:
+  name: minimal_integration
+  schematic: minimal.kicad_sch
+transforms:
+  - id: rename-r1
+    op: set_property
+    selector:
+      reference: R1
+    property: Value
+    value: "2k2"
+  - id: nc-r2-pins
+    op: add_no_connect
+    reference: R2
+    pins: [1, 2]

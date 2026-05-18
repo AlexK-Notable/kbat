@@ -1,0 +1,143 @@
+# Klipper companion board — declarative cleanup manifest.
+# Equivalent to cleanup.py; apply with: kbat apply cleanup.kbat.yaml
+apiVersion: kbat.dev/v1alpha1
+kind: Project
+metadata:
+  name: kicad_experiment
+  schematic: /home/komi/notes/kicad/kicad_experiment/kicad_experiment.kicad_sch
+
+transforms:
+
+  # ========================================================== A. VALUE RENAMES
+  # Haiku duplicated each canonical's value field verbatim; only fields that
+  # encode the channel name need updating.
+  - {id: rename-SW22, op: set_property, selector: {reference: SW22}, property: Value, value: "FAN2 rail select"}
+  - {id: rename-J23,  op: set_property, selector: {reference: J23},  property: Value, value: "FAN2 4-pin out"}
+  - {id: rename-SW42, op: set_property, selector: {reference: SW42}, property: Value, value: "FAN3 rail select"}
+  - {id: rename-J43,  op: set_property, selector: {reference: J43},  property: Value, value: "FAN3 4-pin out"}
+  - {id: rename-SW62, op: set_property, selector: {reference: SW62}, property: Value, value: "FAN4 rail select"}
+  - {id: rename-J63,  op: set_property, selector: {reference: J63},  property: Value, value: "FAN4 4-pin out"}
+  - {id: rename-SW26, op: set_property, selector: {reference: SW26}, property: Value, value: "FAN6 rail select"}
+  - {id: rename-J27,  op: set_property, selector: {reference: J27},  property: Value, value: "FAN6 3-pin out"}
+  - {id: rename-SW28, op: set_property, selector: {reference: SW28}, property: Value, value: "FAN8 rail select"}
+  - {id: rename-J31,  op: set_property, selector: {reference: J31},  property: Value, value: "FAN8 2-pin out"}
+  - {id: rename-SW48, op: set_property, selector: {reference: SW48}, property: Value, value: "FAN9 rail select"}
+  - {id: rename-J51,  op: set_property, selector: {reference: J51},  property: Value, value: "FAN9 2-pin out"}
+  - {id: rename-SW68, op: set_property, selector: {reference: SW68}, property: Value, value: "FAN10 rail select"}
+  - {id: rename-J71,  op: set_property, selector: {reference: J71},  property: Value, value: "FAN10 2-pin out"}
+  - {id: rename-J33,  op: set_property, selector: {reference: J33},  property: Value, value: "TH2 NTC in"}
+  - {id: rename-U24,  op: set_property, selector: {reference: U24},  property: Value, value: "MAX31865 (TH4)"}
+  - {id: rename-J35,  op: set_property, selector: {reference: J35},  property: Value, value: "TH4 RTD in"}
+
+  # =========================================================== B. NO-CONNECTS
+  # Pico (U_MCU): LCD pins (consumed on-board) + spare GPIO/control
+  - id: nc-U_MCU
+    op: add_no_connect
+    reference: U_MCU
+    pins: [11, 12, 14, 15, 16, 30, 34, 35, 37]
+  # MCP23017 (U5): spare port B + spare GPA + unused INTB + physical NC pins
+  - id: nc-U5
+    op: add_no_connect
+    reference: U5
+    pins: [1, 2, 3, 4, 5, 6, 7, 8, 11, 14, 19, 27, 28]
+  # MAX31865 — pins 7/9/20 unused in 2-wire RTD mode
+  - id: nc-U4
+    op: add_no_connect
+    reference: U4
+    pins: [7, 9, 20]
+  - id: nc-U24
+    op: add_no_connect
+    reference: U24
+    pins: [7, 9, 20]
+
+  # ========================================================= D. LABEL-SNAP U_MCU
+  # MCP's add_schematic_net_label puts labels at the END of the text, ~11-13mm
+  # off the pin endpoint. Snap each label to the exact pin endpoint.
+  - id: snap-U_MCU
+    op: snap_labels_to_pins
+    reference: U_MCU
+    tolerance_mm: 25.0
+    mapping:
+      "1":  FAN1_PWM
+      "2":  FAN2_PWM
+      "3":  GND
+      "4":  FAN3_PWM
+      "5":  FAN4_PWM
+      "6":  FAN5_DRIVE
+      "7":  FAN6_DRIVE
+      "9":  FAN7_DRIVE
+      "10": FAN8_DRIVE
+      "17": FAN9_DRIVE
+      "19": FAN10_DRIVE
+      "20": TH4_CS
+      "21": SPI_MISO
+      "22": TH3_CS
+      "24": SPI_SCK
+      "25": SPI_MOSI
+      "26": I2C_SDA
+      "27": I2C_SCL
+      "29": MCP_INT
+      "31": TH1_NTC
+      "32": TH2_NTC
+      "33": GND
+      "36": "+3V3"
+      "39": VSYS_MCU
+      "40": VBUS
+
+  # ========================================================= D. LABEL-SNAP U5
+  - id: snap-U5
+    op: snap_labels_to_pins
+    reference: U5
+    tolerance_mm: 25.0
+    mapping:
+      "9":  "+3V3"
+      "10": GND
+      "12": I2C_SCL
+      "13": I2C_SDA
+      "15": GND
+      "16": GND
+      "17": GND
+      "18": "+3V3"
+      "20": MCP_INT
+      "21": FAN1_TACH
+      "22": FAN2_TACH
+      "23": FAN3_TACH
+      "24": FAN4_TACH
+      "25": FAN5_TACH
+      "26": FAN6_TACH
+
+  # ====================================================== F. COLLISION CLEANUP
+  # Specific labels known to be in the wrong place. Deletes first, then moves.
+  - {id: del-TH4_RTD_MINUS, op: delete_label_at, net: TH4_RTD_MINUS, x: 234.95, y: 274.32}
+  - {id: del-TH2_NTC,       op: delete_label_at, net: TH2_NTC,       x: 114.30, y: 247.65}
+  - {id: del-FAN6_VPLUS,    op: delete_label_at, net: FAN6_VPLUS,    x: 157.48, y: 203.20}
+  - {id: del-GND-spi-miso,  op: delete_label_at, net: GND,           x: 114.30, y: 250.19}
+  - {id: move-FAN9_PLUS, op: move_label, net: FAN9_PLUS,
+     from_x: 279.40, from_y: 243.84, to_x: 279.40, to_y: 246.38}
+
+  # ============================================================ G. PWR_FLAGS
+  - {id: pwr-VSYS_MCU, op: add_pwr_flag, net: VSYS_MCU, x: 210.0, y: 35.0}
+
+  # ============================================================ C. FOOTPRINTS
+  # Bulk lib_id -> footprint. power:* virtual symbols are skipped automatically.
+  - id: footprints-all
+    op: assign_footprints
+    by_lib_id:
+      "Device:R": "Resistor_SMD:R_0603_1608Metric"
+      "Device:C": "Capacitor_SMD:C_0603_1608Metric"
+      "Device:C_Polarized": "Capacitor_SMD:CP_Elec_6.3x7.7"
+      "Device:L": "Inductor_SMD:L_12x12mm_H8mm"
+      "Device:Polyfuse": "Resistor_SMD:R_1812_4532Metric"
+      "Device:D_Zener": "Diode_SMD:D_SOD-123"
+      "Device:D_Schottky": "Diode_SMD:D_SMA"
+      "Transistor_FET:Q_PMOS_GSD": "Package_TO_SOT_SMD:SOT-23"
+      "Transistor_FET:Q_NMOS_GSD": "Package_TO_SOT_SMD:SOT-23"
+      "Connector:Screw_Terminal_01x02": "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2_5.08mm"
+      "Connector:Screw_Terminal_01x03": "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-3_5.08mm"
+      "Connector:Screw_Terminal_01x04": "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-4_5.08mm"
+      "Connector_Generic:Conn_01x03": "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical"
+      "Regulator_Switching:TPS54302": "Package_TO_SOT_SMD:SOT-23-6"
+      "Sensor_Temperature:MAX31865xAP": "Package_SO:SSOP-20_4.4x6.5mm_P0.65mm"
+      "Interface_Expansion:MCP23017x-x-SO": "Package_SO:SOIC-28W_7.5x17.9mm_P1.27mm"
+      "MCU_Module:RaspberryPi_Pico": "MCU_Module:RaspberryPi_Pico_SMD_TH"
+      "Switch:SW_SP3T": "Button_Switch_THT:SW_Slide_1P3T_CK_OS103011MA1QN1"
