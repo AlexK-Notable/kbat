@@ -30,11 +30,9 @@ Examples that PASS:
     add_no_connect          → matched by test_add_no_connect_adds_then_noop
     snap_labels_to_pins     → matched by test_snap_labels_to_pins_idempotent
 
-Note on ``relax_validation``: this is a backend-compat shim, not a
-primitive (it does not declare an apply/idempotent contract). It is
-explicitly excluded by :func:`conftest.discover_primitives`. If a future
-refactor reclassifies it as a primitive, this meta-test will start
-demanding coverage automatically — which is the right behaviour.
+Non-primitive exports of :mod:`kbat.ops` would be listed in
+``conftest._NON_PRIMITIVE_EXPORTS``; it is empty since the kicad-sch-api
+``relax_validation`` shim was removed with the move to akcli.
 """
 
 from __future__ import annotations

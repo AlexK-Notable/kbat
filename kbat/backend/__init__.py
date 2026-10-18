@@ -8,7 +8,13 @@ another ``read_state`` / ``draw`` pair that accepts the same op dicts.
 """
 
 from kbat.backend.akcli import BackendError, DrawResult, draw, read_state, to_mil, to_mm
-from kbat.backend.fidelity import FidelityError, FieldCounts, check_field_counts, check_moved_labels
+from kbat.backend.fidelity import (
+    FidelityError,
+    FieldCounts,
+    apply_guarded,
+    check_field_counts,
+    check_moved_labels,
+)
 from kbat.backend.state import BoardState, Component, Label
 
 __all__ = [
@@ -19,6 +25,7 @@ __all__ = [
     "FidelityError",
     "FieldCounts",
     "Label",
+    "apply_guarded",
     "check_field_counts",
     "check_moved_labels",
     "draw",

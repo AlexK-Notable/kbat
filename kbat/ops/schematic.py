@@ -57,15 +57,29 @@ def _pin_xy(state: BoardState, reference: str, pin_number: str) -> tuple[float, 
     return comp.pins.get(str(pin_number))
 
 
+def _delete_label_op(lab: Label) -> Op:
+    """Delete ``lab`` by its file uuid; by name + position only if it has none.
+
+    akcli's ``match.at`` is exact in mils, so a label off the whole-mil grid
+    (e.g. 50 mm = 1968.503937 mil) is never matched and the delete silently
+    no-ops. Labels read from the file always carry a uuid. Only labels
+    created earlier in the same op-list lack one, and those sit exactly
+    where kbat placed them (a pin or a whole-mil point).
+    """
+    if lab.uuid:
+        return {"op": "delete_object", "uuid": lab.uuid}
+    return {
+        "op": "delete_object",
+        "match": {"kind": "label", "name": lab.name, "at": [to_mil(lab.x), to_mil(lab.y)]},
+    }
+
+
 def _move_label(
     state: BoardState, lab: Label, to_at: str | list[int | float], to_xy: tuple[float, float]
 ) -> list[Op]:
     """Ops moving ``lab`` to ``to_at``; updates ``lab`` and logs the move."""
     ops: list[Op] = [
-        {
-            "op": "delete_object",
-            "match": {"kind": "label", "name": lab.name, "at": [to_mil(lab.x), to_mil(lab.y)]},
-        },
+        _delete_label_op(lab),
         {
             "op": "add_net_label",
             "name": lab.name,
@@ -75,7 +89,9 @@ def _move_label(
         },
     ]
     lab.x, lab.y = to_xy
-    state.moves.append((lab.name, to_xy[0], to_xy[1], lab.effects))
+    lab.uuid = None  # the re-added label is a new node, created by akcli
+    if not any(m is lab for m in state.moved):
+        state.moved.append(lab)
     return ops
 
 
@@ -234,20 +250,15 @@ def delete_label_at(
 ) -> list[Op]:
     """Delete the ``net`` label at ``(x, y)`` ±``tolerance_mm``.
 
-    The lookup uses the tolerance; the emitted delete names the label's
-    exact file position. No ops if no label matches.
+    The lookup uses the tolerance; the emitted delete names the label
+    itself (see :func:`_delete_label_op`). No ops if no label matches.
     """
     matches = state.labels_near(net, x, y, tolerance_mm)
     if not matches:
         return []
     lab = matches[0]
     state.labels.remove(lab)
-    return [
-        {
-            "op": "delete_object",
-            "match": {"kind": "label", "name": net, "at": [to_mil(lab.x), to_mil(lab.y)]},
-        }
-    ]
+    return [_delete_label_op(lab)]
 
 
 def move_label(

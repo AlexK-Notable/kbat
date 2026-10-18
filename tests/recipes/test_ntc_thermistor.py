@@ -9,15 +9,15 @@ tests are first collected, in which case the import error is the
 expected (transient) signal — tests go green once the recipe lands.
 
 Mock policy: no mocking. The recipe acts on a real ``.kicad_sch`` file
-via :mod:`kicad_sch_api`; the tests give it a tmp-path copy of a real
-synthetic fixture (`tests/fixtures/recipes/ntc_minimal.kicad_sch`).
+via :mod:`kbat.backend` (akcli); the tests give it a tmp-path copy of a
+real synthetic fixture (`tests/fixtures/recipes/ntc_minimal.kicad_sch`).
 
-Idempotence approach: per Phase 2.1 finding [[VS1uMQqWcgddDeIaCe2hT]]
-``add_no_connect`` and ``add_pwr_flag`` mint fresh UUIDs each save, so
-byte-identity across two applies is NOT achievable on schematics that
-exercise those primitives. We compare the load-bearing FunctionalFacts
-extracted by :func:`kbat._validation.extract_functional_facts` instead —
-this matches the Phase 1 hard-gate idempotence definition (1.G.c).
+Idempotence approach: a converged recipe compiles to no ops, so the
+second apply never writes and the file is byte-identical. The test also
+compares the load-bearing FunctionalFacts from
+:func:`kbat._validation.extract_functional_facts`. (Under kicad-sch-api,
+Phase 2.1 finding [[VS1uMQqWcgddDeIaCe2hT]], fresh UUIDs on every save
+made byte-identity unreachable, so only the facts were compared.)
 """
 
 from __future__ import annotations
@@ -142,18 +142,12 @@ def test_apply_succeeds_on_minimal_fixture(tmp_path: Path) -> None:
 
 
 def test_apply_is_functionally_idempotent(tmp_path: Path) -> None:
-    """Re-applying the same recipe produces identical load-bearing facts.
+    """Re-applying the same recipe leaves the file byte-identical.
 
-    Byte-equality across applies is NOT achievable when the recipe uses
-    ``add_no_connect`` or ``add_pwr_flag`` — both mint fresh UUIDs per
-    save (upstream kicad-sch-api behaviour, documented in Phase 2.1
-    findings [[VS1uMQqWcgddDeIaCe2hT]]). The functional contract is
-    weaker but still tight: components, labels, no-connect positions,
-    power-flag positions, and footprint assignments must match exactly
-    after the second apply.
-
-    This is the same idempotence definition the Phase 1 hard gate (1.G.c)
-    settled on after the byte-identity goal proved impossible cross-backend.
+    The second apply compiles to no ops against the converged file, so
+    it does not write at all. Components, labels, no-connect positions,
+    power-flag positions and footprint assignments are also compared, so
+    a failure says which fact diverged.
 
     Catches: a recipe that re-runs op-bodies on already-converged state
     (duplicating NC markers, re-incrementing #FLGn references, etc.) —
@@ -169,6 +163,7 @@ def test_apply_is_functionally_idempotent(tmp_path: Path) -> None:
         f"{first_result.errors}"
     )
     facts_after_first = extract_functional_facts(sch_path)
+    bytes_after_first = sch_path.read_bytes()
 
     second_result = apply_ntc_thermistor(sch_path, params)
     assert not second_result.errors, (
@@ -180,6 +175,9 @@ def test_apply_is_functionally_idempotent(tmp_path: Path) -> None:
     assert facts_after_first == facts_after_second, (
         "functional facts diverged across two applies — recipe is "
         "not idempotent on the load-bearing fields"
+    )
+    assert sch_path.read_bytes() == bytes_after_first, (
+        "second apply rewrote the converged schematic"
     )
 
 

@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from kbat.backend.akcli import _read_labels_and_ncs
+from kbat.backend.akcli import DrawResult, _read_labels_and_ncs, draw
 
 _LIB_SYMBOL_RE = re.compile(r'^\t\t\(symbol "', re.M)
 
@@ -79,4 +79,35 @@ def _norm(effects: str) -> str:
     return re.sub(r"\s+", " ", effects).strip()
 
 
-__all__ = ["FidelityError", "FieldCounts", "check_field_counts", "check_moved_labels"]
+def apply_guarded(
+    path: Path | str, ops: list[dict], moves: list[tuple[str, float, float, str]]
+) -> DrawResult:
+    """Apply ``ops`` to ``path`` and verify nothing untargeted was lost.
+
+    On a :class:`FidelityError` the file's original bytes are written
+    back (atomically) before the error propagates, so callers never see a
+    lossy file on disk. :class:`~kbat.backend.akcli.BackendError` needs no
+    restore: akcli leaves the file untouched when it refuses or fails.
+    """
+    path = Path(path)
+    original = path.read_bytes()
+    before = FieldCounts.of(path)
+    drawn = draw(path, ops, apply=True)
+    try:
+        check_field_counts(before, FieldCounts.of(path))
+        check_moved_labels(path, moves)
+    except FidelityError:
+        from kbat._safety import atomic_write
+
+        atomic_write(path, original)
+        raise
+    return drawn
+
+
+__all__ = [
+    "FidelityError",
+    "FieldCounts",
+    "apply_guarded",
+    "check_field_counts",
+    "check_moved_labels",
+]

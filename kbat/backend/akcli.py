@@ -114,8 +114,23 @@ def _read_labels_and_ncs(path: Path) -> tuple[list[Label], list[tuple[float, flo
         x, y = float(at[1]), float(at[2])
         if head == "label":
             rot = float(at[3]) if len(at) > 3 else 0.0
+            uuid = next(
+                (
+                    str(c[1])
+                    for c in node[1:]
+                    if isinstance(c, list) and len(c) > 1 and _sym(c[0]) == "uuid"
+                ),
+                None,
+            )
             labels.append(
-                Label(name=str(node[1]), x=x, y=y, rotation=rot, effects=_effects_str(node))
+                Label(
+                    name=str(node[1]),
+                    x=x,
+                    y=y,
+                    rotation=rot,
+                    effects=_effects_str(node),
+                    uuid=uuid,
+                )
             )
         elif head == "no_connect":
             ncs.append((x, y))

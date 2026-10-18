@@ -669,7 +669,7 @@ class TestWriterReaderBridge:
         assert the snapshot was unlinked.
         """
         # The test is structured to exercise the cleanup branch directly
-        # without depending on a real kicad-sch-api schematic. We
+        # without depending on a real schematic or backend. We
         # simulate the runner's flow inline: create snapshot, then run
         # the error cleanup branch and assert the snapshot is gone.
         from kbat._safety import make_snapshot

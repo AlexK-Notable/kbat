@@ -15,6 +15,7 @@ import pytest
 from kbat._validation import (
     criterion_functional_equivalence,
     criterion_idempotence,
+    criterion_kicad10_fidelity,
     criterion_loc,
     criterion_readable_diff,
 )
@@ -44,3 +45,9 @@ def test_gate_1gc_idempotence() -> None:
 def test_gate_1gd_readable_diff() -> None:
     """1.G.d — kbat plan emits ≥3 op-keywords."""
     assert criterion_readable_diff()
+
+
+@pytest.mark.gate
+def test_gate_1ge_kicad10_fidelity() -> None:
+    """1.G.e — apply drops no body_style / in_pos_files / lib_symbols entries."""
+    assert criterion_kicad10_fidelity()

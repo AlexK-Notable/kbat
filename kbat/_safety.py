@@ -201,9 +201,8 @@ def atomic_write(path: Path, content: bytes | str) -> None:
 def atomic_write_file(src: Path, dst: Path) -> None:
     """Copy ``src`` to ``dst`` atomically via the same tmp+rename pattern.
 
-    Used when the source content is already on disk (e.g. kicad-sch-api
-    saved to a tmp file via its own writer); we just need to atomically
-    publish it.
+    Used when the source content is already on disk (e.g. a file another
+    writer produced); we just need to atomically publish it.
     """
     src = Path(src)
     dst = Path(dst)

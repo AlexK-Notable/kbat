@@ -68,37 +68,14 @@ Example::
 
 from __future__ import annotations
 
-import re as _re
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from kbat import backend
 from kbat.ops import add_pwr_flag, set_property, snap_labels_to_pins
 from kbat.schema.v1alpha1 import ApplyResult, DetailEntry
-
-# Permissive reference pattern: accept KiCad references with underscores
-# (e.g. ``R_TH1``) that ``kicad-sch-api`` 0.5.5's legacy validator rejects
-# on save. Inlined here rather than imported from :mod:`kbat.ops.schematic`
-# so the recipe's import surface contains ONLY the 7 v0.1.1 primitives
-# (per Phase 6 gate Check 6.4 — recipes must not depend on backend-compat
-# shims that are not themselves primitives).
-_PERMISSIVE_REF_RE = _re.compile(
-    r"^(#[A-Z]+[0-9]+|[A-Z][A-Z0-9_]*[A-Z0-9]?|[A-Z]+\?)$"
-)
-
-
-def _relax_save_validation(sch: Any) -> None:
-    """Loosen the per-instance reference validator (private helper).
-
-    Mirrors :func:`kbat.ops.schematic.relax_validation` but lives in this
-    module so the recipe does not depend on a non-primitive export from
-    :mod:`kbat.ops`. Safe to call multiple times.
-    """
-    legacy = getattr(sch, "_legacy_validator", None)
-    if legacy is not None:
-        legacy._valid_reference_pattern = _PERMISSIVE_REF_RE
-
 
 # ---- curated chip table (v0.5 expands; this is a 3-entry spike) -----------
 
@@ -230,18 +207,16 @@ def apply_ntc_thermistor(
 
     The recipe is idempotent: a second application against the
     already-configured schematic returns ``ApplyResult(applied=0, ...)``
-    on the *functional* level. (UUIDs minted by ``add_pwr_flag`` may
-    still differ on re-save — Phase 2.1 flag, see
-    :class:`kbat._validation.FunctionalFacts`.)
+    and does not write the file at all.
 
     Args:
         schematic_path: Path to a writable ``.kicad_sch`` file. The
-            recipe loads, mutates in memory, and saves in place
-            (unless ``save=False``).
+            recipe reads it, compiles every primitive against its state,
+            and applies the ops in one guarded backend write (unless
+            ``save=False``).
         params: Validated :class:`NtcThermistorParams`.
-        save: If False, mutate the in-memory schematic but don't save
-            to disk — useful for tests that want to inspect the result
-            without round-tripping through KiCad serialisation.
+        save: If False, compile only and don't write the file — useful
+            for tests that want the per-primitive outcome without a write.
 
     Returns:
         :class:`ApplyResult` with one :class:`DetailEntry` per
@@ -253,8 +228,6 @@ def apply_ntc_thermistor(
         KeyError / AttributeError: a required component or label is
             missing from the schematic (caller did not pre-place).
     """
-    import kicad_sch_api as ksa
-
     # ---- validate params ------------------------------------------------
     if params.chip not in CHIP_TABLE:
         raise ValueError(
@@ -267,16 +240,17 @@ def apply_ntc_thermistor(
     if not sch_path.exists():
         raise FileNotFoundError(sch_path)
 
-    sch = ksa.Schematic.load(str(sch_path))
-    _relax_save_validation(sch)
+    sch = backend.read_state(sch_path)
 
     applied = 0
     skipped = 0
     details: list[DetailEntry] = []
+    compiled: list[dict[str, Any]] = []
 
-    def _record(tid: str, op_name: str, changed: bool) -> None:
+    def _record(tid: str, op_name: str, emitted: list[dict[str, Any]]) -> None:
         nonlocal applied, skipped
-        if changed:
+        compiled.extend(emitted)
+        if emitted:
             applied += 1
             details.append(DetailEntry(id=tid, op=op_name, status="applied"))
         else:
@@ -351,19 +325,18 @@ def apply_ntc_thermistor(
 
     # ---- 4. (optional) add PWR_FLAG on the supply rail -------------------
     if params.add_pwr_flag_for_vref:
-        pullup_pin1 = sch.get_component_pin_position(params.pullup_reference, "1")
+        pullup = sch.components.get(params.pullup_reference)
+        pullup_pin1 = pullup.pins.get("1") if pullup is not None else None
         if pullup_pin1 is not None:
             _record(
                 "vref-pwr-flag",
                 "add_pwr_flag",
-                add_pwr_flag(
-                    sch, params.vref_net, float(pullup_pin1.x), float(pullup_pin1.y)
-                ),
+                add_pwr_flag(sch, params.vref_net, pullup_pin1[0], pullup_pin1[1]),
             )
 
-    # ---- 5. save (unless caller opted out) -------------------------------
-    if save:
-        sch.save(str(sch_path))
+    # ---- 5. write (unless caller opted out or nothing changed) -----------
+    if save and compiled:
+        backend.apply_guarded(sch_path, compiled, sch.moves)
 
     return ApplyResult(
         applied=applied,

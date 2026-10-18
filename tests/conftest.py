@@ -6,24 +6,30 @@ schematic and the synthetic goldens, plus a helper that introspects
 the primitive-discovery logic in *one* place so the meta-test and the
 Hypothesis property tests cannot drift apart.
 
-No mocking of ``kicad_sch_api``, the filesystem, or schematic fixtures
+No mocking of the akcli backend, the filesystem, or schematic fixtures
 per the testing-strategy note [[HE4_MvAS391OEYJ6M_G3h]] (mock theater
 forbidden — the byte-exact contract is the contract).
 """
 
 from __future__ import annotations
 
+import copy
+import functools
 import inspect
 import shutil
 from pathlib import Path
 
 import pytest
 
+from kbat import backend
+
 # ---- canonical paths --------------------------------------------------------
 
-#: The real schematic that the cleanup.py validation gate targets.
-REAL_SCHEMATIC = Path(
-    "/home/komi/notes/kicad/kicad_experiment/kicad_experiment.kicad_sch"
+#: The vendored Klipper companion board, before cleanup.py ran (the gate's
+#: input). A real KiCad 10 file: 109 symbols, body_style / in_pos_files on
+#: every symbol, an embedded power:PWR_FLAG.
+REAL_SCHEMATIC = (
+    Path(__file__).parent / "fixtures" / "validation_gate" / "kicad_experiment.kicad_sch"
 )
 
 #: Directory holding the v0.1 golden master corpus (6 entries).
@@ -42,7 +48,7 @@ SYNTHETIC_GOLDENS = (
 
 #: Names exported from ``kbat.ops`` that are NOT primitives but compat
 #: helpers / type-hints / module imports. Excluded from PRIMITIVE_REGISTRY.
-_NON_PRIMITIVE_EXPORTS = frozenset({"relax_validation"})
+_NON_PRIMITIVE_EXPORTS: frozenset[str] = frozenset()
 
 
 def discover_primitives() -> frozenset[str]:
@@ -112,22 +118,18 @@ def synthetic_edge_cases_copy(tmp_path: Path) -> Path:
     return dst
 
 
-@pytest.fixture
-def loaded_real_schematic(real_schematic_copy: Path):
-    """Load the real schematic into a kicad-sch-api object with relaxed validation.
+@functools.cache
+def _cached_state(src: str) -> backend.BoardState:
+    return backend.read_state(Path(src))
 
-    The Hypothesis property tests use this fixture; it avoids per-example
-    reload cost while still giving each test a fresh in-memory mutable
-    schematic (because ``tmp_path`` is per-test, the underlying bytes are
-    per-test).
+
+def fresh_state(src: Path) -> backend.BoardState:
+    """A private copy of ``src``'s board state, read through akcli once per run.
+
+    The Hypothesis property tests compile against this in memory, so each
+    example starts from the fixture's state without a per-example akcli call.
     """
-    import kicad_sch_api as ksa
-
-    from kbat.ops import relax_validation
-
-    sch = ksa.Schematic.load(str(real_schematic_copy))
-    relax_validation(sch)
-    return sch
+    return copy.deepcopy(_cached_state(str(src)))
 
 
 @pytest.fixture

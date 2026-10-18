@@ -35,13 +35,13 @@ remain on the original calendar budget).
 | Schematic primitives | 7 of ~25 planned: `set_property`, `add_no_connect`, `snap_labels_to_pins`, `assign_footprints`, `delete_label_at`, `move_label`, `add_pwr_flag` (Flag #1 resolved in v0.1.1: grid-snapped + Hypothesis re-widened) |
 | PCB primitives | 0 — deferred entirely to v0.5 |
 | Recipes | 0 — Phase 3 deferred |
-| Backend | `kicad-sch-api ~=0.5.6` only; `kicad-skip` parity dropped |
+| Backend | `akcli-kicad >=0.22,<0.23` (subprocess, in-place edits) since 2026-10, replacing `kicad-sch-api ~=0.5.6`; kbat compiles transforms to one akcli op-list and guards every write for KiCad 10 field loss |
 | Safety | atomic write (`os.replace` + fsync), `O_CREAT|O_EXCL` lock with host-match reclamation, sidecar state file via shared `kbat/_state_schema.py` Pydantic model (OSTH: One Schema, Two Halves — writer in `_safety.py`, reader in `_rollback.py`, both serialise through the same `StateFile`) |
-| Tests | 129 pass / 3 skipped / 0 fail on a vendored-fixture suite reproducible on any checkout. Diamond-pyramid target-shape established (round-trip + golden + Hypothesis + manifest fuzz + unit); see §7.3 + `docs/testing.md` for target distribution vs current measurement |
-| Validation gate | PASS — 143-line manifest reproduces 420-line `cleanup.py` at functional-equivalence; byte-identical re-apply at 306,647 bytes. **Now CI-enforceable**: 4 `@pytest.mark.gate` tests under `tests/gate/test_validation_gate.py`, fixtures vendored at `tests/fixtures/validation_gate/`, env-derived paths in `_validation.py`, GHA workflow split into `fast` + `gate` jobs |
+| Tests | 125 fast tests pass (5 gate tests deselected) on a vendored-fixture suite. The kicad-sch-api round-trip and golden tests were replaced by file-level fidelity tests (`tests/test_fidelity.py`) and per-primitive apply-then-recompile tests; see §7.3 + `docs/testing.md` |
+| Validation gate | PASS (2026-10-17, akcli backend) — 5 `@pytest.mark.gate` tests (1.G.a-e) under `tests/gate/test_validation_gate.py`. Input is the genuine pre-cleanup board; output is compared to the stored `cleanup.py` result (`expected_cleanup_output.kicad_sch`), re-apply is byte-identical at 329,896 bytes, and 1.G.e checks no `body_style` / `in_pos_files` / `lib_symbols` entries are lost. (The earlier gate ran against an already-cleaned fixture and silently ran `cleanup.py` on the real board's path; fixed in the same change) |
 | MCP integration | **None.** `mcp__kbat__run` deferred to v0.5 |
 | Distribution | local `uv` editable; no PyPI publish; no Docker; no docs site |
-| Open flags | 6 (1 HIGH, 4 MEDIUM, 1 LOW) — see Appendix A |
+| Open flags | 1 of 6 open (#4, Cue revisit, MEDIUM) — see Appendix A |
 
 ---
 
@@ -70,6 +70,12 @@ Phase 1 validation criterion from "tree-equivalent" to
 normalizations." The master spec's "byte-exact roundtrip" claim
 (§7) is currently aspirational, not achieved, for KiCad-10 inputs.
 **v0.5 revisits when kicad-sch-api gains KiCad-10 support upstream.**
+
+*Update 2026-10-17:* resolved by changing backend rather than waiting
+on upstream (kicad-sch-api had no release since 2025-11-19). kbat now
+writes through akcli, which edits only the objects an op touches; the
+gate's 1.G.e criterion confirms all 109 `body_style`, 138
+`in_pos_files` and 29 `lib_symbols` entries survive the full cleanup.
 
 **Claim 3 — empirical-first sequencing is the right plan shape for the
 rest of v0.1.** The Reframer's POC-first plan put the gate at the end
@@ -294,6 +300,9 @@ KiCad MCP server consume it. Two design constraints:
 
 ### 4.6 KiCad-10 lossiness revisit (Flag #3)
 
+> **Obsolete (2026-10-17).** Trigger 3 fired in effect: kbat moved to
+> the akcli backend, which preserves KiCad 10 fields. Kept for history.
+
 Track upstream kicad-sch-api KiCad-10 support. Three triggers, any
 one promotes the Phase 1 1.G.b criterion back to strict
 tree-equivalence:
@@ -308,6 +317,9 @@ remains, but the validation gate is re-run against the latest
 kicad-sch-api with the orphan-lib_symbols normalization unchanged.
 
 ### 4.7 Re-examining the `kicad-sch-api ~=0.5.6` pin
+
+> **Obsolete (2026-10-17).** The pin and every workaround below were
+> removed with the move to akcli. Kept for history.
 
 Flag #2 (the four upstream API quirks; Appendix C). If
 kicad-sch-api 0.5.7 / 0.6.x / 0.7.x fixes any of:
@@ -437,6 +449,11 @@ These run alongside the milestone train.
 
 ### 7.1 Upstream contributions workstream
 
+> **Obsolete (2026-10-17)** for kicad-sch-api, which kbat no longer
+> uses. Gaps found in akcli (e.g. `delete_object` `match.at` requires
+> exact mils, so off-grid labels can only be deleted by uuid) are the
+> new candidates.
+
 File four upstream issues against kicad-sch-api during v0.1.x (Appendix
 C). For each: minimal reproducer, root-cause analysis, suggested fix,
 link to the kbat in-tree workaround. Owner: maintainer who is closest
@@ -489,7 +506,7 @@ Top-five risks ordered by combined likelihood × impact.
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|------|------------|--------|-----------|
-| 1 | kicad-sch-api KiCad-10 support doesn't land by v0.5 | Medium | Medium | Caveat stays in README; functional-equivalence remains the validation criterion. Backend swap path exists (kicad-skip parity dropped intentionally — re-adding via subprocess is the escape hatch) |
+| 1 | akcli (the backend since 2026-10) changes its op protocol or stalls | Medium | Medium | Pinned to `<0.23`; edit lists declare `protocol_version`; the fidelity guard and gate 1.G.e catch silent field loss on upgrade. Replaces the old risk "kicad-sch-api KiCad-10 support doesn't land", which is closed |
 | 2 | MCP server maintainers delay `mcp__kbat__run` | Medium | High | Spec the tool early (open the integration discussion during v0.1 publish). Fallback: ship a stub MCP server reference implementation in `examples/` to demonstrate feasibility |
 | 3 | KiCad 11 IPC slips its window, leaving PCB ops on SWIG longer than 18mo | Medium | Medium | Subprocess-per-op pattern absorbs this; cost is performance not correctness. PCB v0.5 ops scoped to operations where 200-500ms overhead per op is acceptable |
 | 4 | Schema accumulates a breaking change between `v1beta1` and `v1` that the migration tool can't auto-resolve | Low | High | Per-field deprecation lifecycle with two-release warning; `--strict` mode in `manifest upgrade` blocks judgment-required changes from automation; manual override always available |
@@ -508,10 +525,10 @@ milestone assignment:
 | # | Severity | Flag | Target | Status | Source |
 |---|----------|------|--------|--------|--------|
 | 1 | HIGH | `add_pwr_flag` not idempotent on off-grid coordinates | **v0.1.1** | **RESOLVED in v0.1.1** — Phase 2.4 shipped `add_pwr_flag` snap-to-grid (1.27 mm) and re-widened the Hypothesis strategy atomically with the fix; the `# HYPOTHESIS_MASK: Flag #1` annotation has been removed | `g-YWanREKgb-5tFgf_2Mw` |
-| 2 | MEDIUM | 4 kicad-sch-api 0.5.5 API quirks (Appendix C) | **v0.5** | **OPEN** — workarounds remain in tree; per maintainer directive, upstream issue filing is deferred (community engagement work is out of scope for v0.1.x) | `AdV12nGeybO3g3JOdI-aa` |
-| 3 | MEDIUM | KiCad-10 lossy fields caveat | **v0.5** (revisit when kicad-sch-api gains KiCad-10 support) | **OPEN** — README "KiCad 10 silent-data-loss caveat" + functional-equivalence gate criterion remain in place | `6Ql8zLmuVt5bVHf40OEUh` |
+| 2 | MEDIUM | 4 kicad-sch-api 0.5.5 API quirks (Appendix C) | **v0.5** | **OBSOLETE 2026-10-17** — kicad-sch-api removed with the move to akcli; all four workarounds (incl. `relax_validation`) deleted | `AdV12nGeybO3g3JOdI-aa` |
+| 3 | MEDIUM | KiCad-10 lossy fields caveat | **v0.5** (revisit when kicad-sch-api gains KiCad-10 support) | **RESOLVED 2026-10-17** — akcli backend preserves the fields; README caveat removed; gate criterion 1.G.e enforces it | `6Ql8zLmuVt5bVHf40OEUh` |
 | 4 | MEDIUM | Cue v1.0+ revisit triggers (5 falsifiable conditions) | **v1.0+** (Appendix B) | **OPEN** — deferred to v1.0+, dependent on `cue-py` reaching v1.0 stable | `3SWfu5Hfwx4598KYH9kKC` |
-| 5 | LOW | Hypothesis test runtime budgets at scale | **v0.5** (formal CI-budget policy) | **OPEN** — `PROPERTY_SETTINGS.suppress_health_check` annotated `# HYPOTHESIS_MASK: Flag #5`; promotes to formal CI-budget policy in v0.5 | `g-YWanREKgb-5tFgf_2Mw` |
+| 5 | LOW | Hypothesis test runtime budgets at scale | **v0.5** (formal CI-budget policy) | **RESOLVED 2026-10-17** — property tests now run in memory against a `BoardState`; health-check suppression and the `# HYPOTHESIS_MASK: Flag #5` annotation removed | `g-YWanREKgb-5tFgf_2Mw` |
 | 6 | LOW | KbatLock cross-host reclamation policy doc-debt | **v0.1.1** | **RESOLVED in v0.1.1** — Phase 2.4 shipped `kbat unlock` subcommand (with `--force`) AND expanded `kbat/_safety.py` module docstring with the cross-host policy text; manual-recovery path is now first-class | `EvxjWSffJ9qrJZcNsEwtX` |
 
 ---
@@ -545,6 +562,9 @@ Go binary is the only path, the estimate balloons.
 ---
 
 ## Appendix C — kicad-sch-api API quirks (upstream issues to file)
+
+> **Historical (2026-10-17).** kbat no longer depends on kicad-sch-api;
+> these quirks no longer affect it.
 
 From `AdV12nGeybO3g3JOdI-aa`. Each gets an upstream issue
 during v0.1.x.

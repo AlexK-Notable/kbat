@@ -40,7 +40,6 @@ from kbat._safety import (
     DriftDetectedError,
     KbatLock,
     KbatState,
-    atomic_write_file,
     make_snapshot,
     verify_pinned_signature,
 )
@@ -240,14 +239,14 @@ def _run_inner(
 
     # --- snapshot + apply + fidelity guard ----------------------------------
     snapshot_rel, _pre_sha = make_snapshot(sch_path, project_dir)
-    before = backend.FieldCounts.of(sch_path)
     try:
-        drawn = backend.draw(sch_path, compiled.ops, apply=True)
-        backend.check_field_counts(before, backend.FieldCounts.of(sch_path))
-        backend.check_moved_labels(sch_path, compiled.state.moves if compiled.state else [])
+        drawn = backend.apply_guarded(
+            sch_path, compiled.ops, compiled.state.moves if compiled.state else []
+        )
     except backend.FidelityError as e:
-        atomic_write_file(project_dir / snapshot_rel, sch_path)
-        result.errors.append(f"fidelity: {e} (schematic restored from {snapshot_rel})")
+        # apply_guarded already restored the original bytes; the snapshot
+        # is kept and named so the restore can be checked by hand.
+        result.errors.append(f"fidelity: {e} (schematic restored; snapshot {snapshot_rel})")
         return result
     except backend.BackendError as e:
         # akcli writes atomically, so a refused or failed draw leaves the

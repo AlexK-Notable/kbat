@@ -37,13 +37,18 @@ class Component:
 
 @dataclass
 class Label:
-    """One local net label. ``effects`` is its formatting, normalised to a string."""
+    """One local net label. ``effects`` is its formatting, normalised to a string.
+
+    ``uuid`` is the label's id in the file; ``None`` for a label created by
+    ops compiled earlier in the same run (it has no id until akcli writes it).
+    """
 
     name: str
     x: float
     y: float
     rotation: float = 0.0
     effects: str = ""
+    uuid: str | None = None
 
 
 @dataclass
@@ -51,9 +56,19 @@ class BoardState:
     components: dict[str, Component] = field(default_factory=dict)
     labels: list[Label] = field(default_factory=list)
     no_connects: list[tuple[float, float]] = field(default_factory=list)
-    #: Labels moved by compiled ops, as ``(name, to_x, to_y, effects)``,
-    #: so the post-write fidelity guard can check their formatting survived.
-    moves: list[tuple[str, float, float, str]] = field(default_factory=list)
+    #: Labels moved by compiled ops (the same objects as in ``labels``), so
+    #: the post-write fidelity guard can check their formatting survived.
+    moved: list[Label] = field(default_factory=list)
+
+    @property
+    def moves(self) -> list[tuple[str, float, float, str]]:
+        """``(name, x, y, effects)`` of each moved label still present, at its final position.
+
+        A label moved and later deleted (or moved twice) in the same run is
+        reported once, where it ended up, or not at all.
+        """
+        present = {id(lab) for lab in self.labels}
+        return [(lab.name, lab.x, lab.y, lab.effects) for lab in self.moved if id(lab) in present]
 
     def labels_near(self, net: str, x: float, y: float, tolerance: float) -> list[Label]:
         """Labels whose text is ``net`` and whose position is within ``tolerance``."""
