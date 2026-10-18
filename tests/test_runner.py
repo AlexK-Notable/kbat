@@ -22,6 +22,7 @@ from kbat._runner import (
     load_manifest,
     resolve_schematic_path,
 )
+from kbat.backend import BoardState, Component
 from kbat.schema.v1alpha1 import (
     Manifest,
     RefSelector,
@@ -136,93 +137,42 @@ def test_resolve_schematic_path_relative(tmp_path: Path) -> None:
 # ---- dispatch ---------------------------------------------------------------
 
 
-# DUCK_FAKE: tests dispatcher routing, not schematic mutation
-class _FakeComponent:
-    """Duck-typed stand-in for kicad-sch-api Component.
-
-    Exposes the same surface ops.set_property reads from: settable
-    ``value``/``footprint``/``reference`` attributes plus a
-    ``get_property``/``set_property`` pair for everything else.
-    """
-
-    def __init__(self, reference: str, props: dict[str, str]) -> None:
-        self.reference = reference
-        self._props = dict(props)
-
-    @property
-    def value(self) -> str | None:
-        return self._props.get("Value")
-
-    @value.setter
-    def value(self, v: str) -> None:
-        self._props["Value"] = v
-
-    @property
-    def footprint(self) -> str | None:
-        return self._props.get("Footprint")
-
-    @footprint.setter
-    def footprint(self, v: str) -> None:
-        self._props["Footprint"] = v
-
-    def get_property(self, name: str) -> dict | None:
-        v = self._props.get(name)
-        return {"value": v} if v is not None else None
-
-    def set_property(self, name: str, value: str) -> None:
-        self._props[name] = value
+def _state(*comps: Component) -> BoardState:
+    return BoardState(components={c.reference: c for c in comps})
 
 
-# DUCK_FAKE: tests dispatcher routing, not schematic mutation
-class _FakeComponents:
-    def __init__(self, comps: list[_FakeComponent]) -> None:
-        self._by_ref = {c.reference: c for c in comps}
-
-    def get(self, reference: str) -> _FakeComponent | None:
-        return self._by_ref.get(reference)
-
-
-# DUCK_FAKE: tests dispatcher routing, not schematic mutation
-class _FakeSchematic:
-    def __init__(self, comps: list[_FakeComponent]) -> None:
-        self.components = _FakeComponents(comps)
-
-
-def test_dispatch_set_property_changes(monkeypatch) -> None:
-    sch = _FakeSchematic([_FakeComponent("R1", {"Value": "old"})])
+def test_dispatch_set_property_changes() -> None:
+    state = _state(Component("R1", "Device:R", {"Value": "old"}))
     t = SetPropertyTransform(
         op="set_property",
         selector=RefSelector(reference="R1"),
         property="Value",
         value="new",
     )
-    changed = dispatch_transform(sch, t)
-    assert changed is True
-    assert sch.components.get("R1").value == "new"
+    emitted = dispatch_transform(state, t)
+    assert emitted == [{"op": "set_component_parameters", "designator": "R1", "value": "new"}]
+    assert state.components["R1"].value == "new"
 
 
-def test_dispatch_set_property_idempotent(monkeypatch) -> None:
-    sch = _FakeSchematic([_FakeComponent("R1", {"Value": "same"})])
+def test_dispatch_set_property_idempotent() -> None:
+    state = _state(Component("R1", "Device:R", {"Value": "same"}))
     t = SetPropertyTransform(
         op="set_property",
         selector=RefSelector(reference="R1"),
         property="Value",
         value="same",
     )
-    changed = dispatch_transform(sch, t)
-    assert changed is False
+    assert dispatch_transform(state, t) == []
 
 
-def test_dispatch_set_property_missing_ref_returns_false() -> None:
-    sch = _FakeSchematic([])
+def test_dispatch_set_property_missing_ref_is_noop() -> None:
     t = SetPropertyTransform(
         op="set_property",
         selector=RefSelector(reference="NOPE"),
         property="Value",
         value="x",
     )
-    changed = dispatch_transform(sch, t)
-    assert changed is False
+    assert dispatch_transform(_state(), t) == []
 
 
 def test_unknown_transform_raises() -> None:

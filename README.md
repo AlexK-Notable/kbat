@@ -35,6 +35,25 @@ Positioning: kbat is to schematic transforms what `make` is to build
 steps and what `kubectl apply` is to cluster state. The manifest is
 the durable artifact; the runner is replaceable.
 
+## How it edits files
+
+kbat does not parse and re-save schematics itself. It reads the board
+state, compiles every transform in the manifest into one
+[akcli](https://github.com/tipoLi5890/akcli) op-list, and applies it with
+a single `akcli draw --apply`, which edits the file in place (only the
+objects an op touches change) and writes atomically. kbat adds what
+akcli's op vocabulary does not have — selector-style transforms such as
+`snap_labels_to_pins` and `assign_footprints` (by `lib_id`), a
+hand-writable YAML manifest, and idempotence decided against the file's
+actual contents: a manifest that is already applied compiles to no ops
+and the file is not rewritten.
+
+After every write kbat checks that no KiCad 10 per-symbol fields
+(`body_style`, `in_pos_files`) or embedded `lib_symbols` were lost and
+that every moved label kept its formatting; if not, it restores the
+original file and reports the error. akcli keeps its own `.akcli/`
+workspace (backups, journal) next to the schematic.
+
 ## Schema
 
 All manifests declare `apiVersion: kbat.dev/v1alpha1`. The schema is
@@ -43,16 +62,14 @@ are gated by version bumps and migration tooling.
 
 ## Validated against
 
-v0.1.x has been exercised on Linux against **one Klipper-companion
-project** (`kicad_experiment`) via the in-tree validation gate at
-`tests/fixtures/validation_gate/`. The gate is now a CI artifact: four
-`@pytest.mark.gate` tests in `tests/gate/test_validation_gate.py` run
-on every push against vendored fixtures, with no host-specific paths.
-The 129-test suite (3 skipped, 0 failed) — including 4 apply-rollback
-integration tests and the 4 gate tests — runs reproducibly on any
-checkout. v0.5 will broaden the evidence base to additional projects;
-treat v0.1.x as a one-project validation, not field-tested across
-diverse KiCad designs.
+kbat has been exercised on Linux against **one Klipper-companion
+project** (`kicad_experiment`, KiCad 10) via the in-tree validation gate
+at `tests/fixtures/validation_gate/`. The gate's input is the board as it
+was before its cleanup script ran; five `@pytest.mark.gate` tests in
+`tests/gate/test_validation_gate.py` check that the cleanup manifest
+reproduces the script's result, re-applies as a byte-identical no-op, and
+keeps every KiCad 10 field. Treat this as a one-project validation, not
+field-tested across diverse KiCad designs.
 
 ## Design rationale
 
@@ -62,47 +79,30 @@ note: `0izyKtvZr5EthRrpD7Yqn`.
 
 ## Supported KiCad versions
 
-> **kbat v0.1 targets KiCad 9 only.** The pinned `kicad-sch-api ~=0.5.6`
-> backend was built against the KiCad 9 schema. Running kbat against a
-> KiCad-10-authored `.kicad_sch` file results in **silent data loss** on
-> save for KiCad-10-only fields — see "KiCad 10 silent-data-loss caveat"
-> below.
-
-If you are on KiCad 10, downgrade your project files to KiCad 9 or wait
-for the v0.5 backend revisit (tracked in `docs/ROADMAP.md` §4.6).
-
-## KiCad 10 silent-data-loss caveat
-
-kbat v0.1 ships with `kicad-sch-api` 0.5.x, which was written against
-the KiCad 9 schema and does not preserve the following KiCad-10-only
-per-symbol attributes when re-serializing a `.kicad_sch` file:
-
-- `body_style`
-- `in_pos_files`
-
-It also prunes orphan `lib_symbols` entries (symbol library definitions
-that are no longer referenced by any component instance).
-
-These differences are explicitly excluded from kbat's Phase 1 validation
-gate (criterion 1.G.b is a **functional-equivalence** check rather than
-a strict tree-equivalence check — load-bearing fields like components,
-nets, labels, no-connects, footprints, and power flags MUST match, while
-the lossy attributes above and orphan definitions are ignored).
-
-v0.5 will revisit strict equivalence once `kicad-sch-api` gains
-KiCad-10 support upstream.
+KiCad 9 and 10 schematic files, as far as `akcli-kicad` 0.22 supports
+them; the gate runs on a KiCad 10 board. Until 2026-10 kbat used
+`kicad-sch-api` 0.5.x, which dropped KiCad 10's `body_style` /
+`in_pos_files` attributes and unused `lib_symbols` on every save; that
+backend is gone.
 
 ## Known limitations
 
-- **KiCad 10 inputs lose `body_style`, `in_pos_files`, and orphan
-  `lib_symbols` on save.** See the "KiCad 10 silent-data-loss caveat"
-  section above. Mitigation: stay on KiCad 9 until v0.5 backend revisit.
+- **Moving a label replaces it.** akcli has no label-move op, so kbat
+  moves a label by deleting it and adding one at the target with the same
+  name, rotation and default formatting. The label gets a new uuid; a
+  label with custom formatting (font size, justification) would be
+  flattened, so kbat refuses that write and restores the file instead.
+- **`add_pwr_flag` needs the `power:PWR_FLAG` symbol** embedded in the
+  schematic or resolvable from a KiCad library table (akcli also looks in
+  `/usr/share/kicad`); otherwise akcli refuses the write.
 - **Single-step undo only.** `kbat rollback` restores the
   snapshot-before-last-apply. There is no multi-step history; running
   `kbat apply` twice in succession means the first apply's snapshot is
   unreachable via the CLI (it is still on disk under
   `.kbat-snapshots/`). Multi-step rollback is a v0.5+ consideration.
-  Until then, rely on your VCS (git) for deeper undo.
+  Until then, rely on your VCS (git) for deeper undo. akcli's own
+  `akcli undo` (rotated backups under `.akcli/backups/`) is a second
+  path, independent of kbat's snapshots.
 
 ## License
 

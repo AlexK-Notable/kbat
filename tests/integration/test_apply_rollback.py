@@ -2,7 +2,7 @@
 
 These tests exercise the writer/reader contract for ``.kbat-state.json``
 through a real :func:`kbat._runner.run` invocation against a real
-``kicad-sch-api`` schematic, followed by a real
+schematic (written by the akcli backend), followed by a real
 :func:`kbat._rollback.restore_previous` call.
 
 The pre-OSTH bug
@@ -31,7 +31,7 @@ halves via import.
 Mock policy
 -----------
 
-No mocking of ``kicad-sch-api``, no mocking of the filesystem. The
+No mocking of the akcli backend, no mocking of the filesystem. The
 only monkey-patch is in
 :func:`test_apply_partial_failure_cleans_orphan_snapshot`, which
 injects a fault into one op to force the runner's partial-failure
@@ -299,7 +299,7 @@ def test_apply_partial_failure_cleans_orphan_snapshot(
 
     MOCK_EXEMPT: fault-injection to deterministically force a
     partial-failure branch in ``_runner._run_inner``. The injected
-    failure target is :mod:`kbat.ops`, not ``kicad-sch-api`` — we
+    failure target is :mod:`kbat.ops`, not the akcli backend — we
     short-circuit the dispatcher's call into the op layer to simulate
     "the second op raised mid-apply" without depending on op-specific
     failure modes (most ops gracefully no-op on bad input).

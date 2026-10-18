@@ -1,7 +1,9 @@
 """Schematic primitive operations — public re-exports.
 
-The runner in :mod:`kbat.cli.main` and the validation harness import
-primitives from here rather than reaching into the implementation module.
+The runner in :mod:`kbat._runner` and the planner import primitives from
+here rather than reaching into the implementation module. Each primitive
+compiles against a :class:`~kbat.backend.state.BoardState` and returns
+backend ops (empty = no-op).
 """
 
 from kbat.ops.schematic import (
@@ -10,7 +12,6 @@ from kbat.ops.schematic import (
     assign_footprints,
     delete_label_at,
     move_label,
-    relax_validation,
     set_property,
     snap_label_to_pin,
     snap_labels_to_pins,
@@ -22,7 +23,6 @@ __all__ = [
     "assign_footprints",
     "delete_label_at",
     "move_label",
-    "relax_validation",
     "set_property",
     "snap_label_to_pin",
     "snap_labels_to_pins",

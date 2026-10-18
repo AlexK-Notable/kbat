@@ -223,6 +223,8 @@ class ApplyResult(_StrictBase):
     skipped: int = 0
     errors: list[str] = Field(default_factory=list)
     details: list[DetailEntry] = Field(default_factory=list)
+    #: akcli's net-diff summary of the write (``! SPLIT ...`` / ``! MERGE ...``).
+    net_changes: list[str] = Field(default_factory=list)
 
 
 __all__ = [

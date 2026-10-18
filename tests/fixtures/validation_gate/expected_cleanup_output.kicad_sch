@@ -1478,7 +1478,7 @@
 
 (label "TH1_NTC" (at 54.61 247.65 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "6821fa1a-ab12-48e5-a6c0-a94b68dc0133")) 
 
-(label "GND" (at 327.66 255.27 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "6a985b1f-73fa-4ef9-9115-4c0a8ede54f3")) 
+(label "GND" (at 327.66 257.81 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "6a985b1f-73fa-4ef9-9115-4c0a8ede54f3")) 
 
 (label "FAN3_VRAIL" (at 85.09 246.38 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "6aa03d61-0d8d-47b9-a402-4e00e0121da9")) 
 
@@ -1630,7 +1630,7 @@
 
 (label "GND" (at 54.61 255.27 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "aaf96029-cb55-4ae8-8000-7c5228b1b86c")) 
 
-(label "GND" (at 327.66 260.35 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "acd3e3d1-0cbd-473a-8c36-58fd227c1780")) 
+(label "GND" (at 327.66 255.27 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "acd3e3d1-0cbd-473a-8c36-58fd227c1780")) 
 
 (label "+12V" (at 90.17 35.56 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "acf20d49-d6ec-45a3-a0b2-438c4a6cfc01")) 
 
@@ -1704,7 +1704,7 @@
 
 (label "+24V" (at 234.95 182.88 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "ce7f0fe9-a5bf-46fa-b8fb-aed29c2b8784")) 
 
-(label "GND" (at 327.66 257.81 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "cee7ec6b-19d7-4a59-957d-469c6f14b6b1")) 
+(label "GND" (at 327.66 260.35 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "cee7ec6b-19d7-4a59-957d-469c6f14b6b1")) 
 
 (label "FAN8_DRIVE" (at 217.17 102.87 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "cf80c3c7-3ec9-4680-bba4-670d8c1882e6")) 
 
@@ -1809,6 +1809,8 @@
 (label "FAN7_PLUS" (at 234.95 187.96 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "f29e9877-556b-4080-8ad2-4c1b6919b509")) 
 
 (label "FAN2_TACH" (at 64.77 229.87 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "f33832bb-967c-44a9-b3b5-8fda6e2ec5b4")) 
+
+(label "TH4_REF" (at 234.95 248.92 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "f55f0033-1622-423c-bbd0-9461a39857d9")) 
 
 (label "RPP_GATE" (at 91.44 54.61 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "f6165454-5f41-484a-8dfd-adc24f290dc1")) 
 
@@ -3148,9 +3150,9 @@
 
 (property "Datasheet" "" (at 30.48 35.56 0) (hide yes) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27)))) 
 
-(property "Description" "" (at 30.48 35.56 0) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27)))) (pin "1" (uuid "400c63f5-b0ec-473e-af57-ae54b4b8da8d")) (instances (project "kicad_experiment" (path "/03389c2d-7850-4c4f-bc2b-cfe91ca6b516" (reference "#FLG1") (unit 1))))) (sheet_instances (path "/" (page "1"))) (embedded_fonts no) (no_connect (at 330.2 224.79) (uuid "b2d76cee-d0f5-4d98-8592-6e2d37082df8")) (no_connect (at 330.2 227.33) (uuid "1a908626-0a23-4f15-8b58-27a1ae809f50")) (no_connect (at 144.78 250.19) (uuid "13481603-0450-4982-86a7-24f14436a5d4")) (no_connect (at 144.78 257.81) (uuid "7471ef10-67cb-427d-82e0-3627207e9956")) (no_connect (at 116.84 257.81) (uuid "563499fb-b75f-4d37-a6ed-c7904d8effd9")) (no_connect (at 224.79 250.19) (uuid "4246be07-e052-4463-875b-e050e98e1959")) (no_connect (at 224.79 257.81) (uuid "205cb2c8-9c91-468d-b828-b8bc93f61663")) (no_connect (at 196.85 257.81) (uuid "f098f7f6-a19e-4555-8e36-77c97d277fa1")) 
+(property "Description" "" (at 30.48 35.56 0) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27)))) (pin "1" (uuid "400c63f5-b0ec-473e-af57-ae54b4b8da8d")) (instances (project "kicad_experiment" (path "/03389c2d-7850-4c4f-bc2b-cfe91ca6b516" (reference "#FLG1") (unit 1))))) (sheet_instances (path "/" (page "1"))) (embedded_fonts no) (no_connect (at 330.2 224.79) (uuid "c61766f4-cda4-4487-a30a-39795795ead4")) (no_connect (at 330.2 227.33) (uuid "f9cdd826-1062-4e04-922b-dd2078c08adc")) (no_connect (at 144.78 250.19) (uuid "5900c5ba-d677-4080-a7f1-52466cdf7454")) (no_connect (at 144.78 257.81) (uuid "caf05f9e-5f26-4221-8103-ee1369969d25")) (no_connect (at 116.84 257.81) (uuid "3f9c15f1-688a-4435-8e9d-5e1938a31352")) (no_connect (at 224.79 250.19) (uuid "3ca089ae-afe3-4507-8c0f-c17cde068732")) (no_connect (at 224.79 257.81) (uuid "4a65de80-2f5a-4d3c-a727-c8c3ef553627")) (no_connect (at 196.85 257.81) (uuid "f6fee71c-515e-4089-bed5-2aa0d360d7af")) 
 
-(symbol (lib_id "power:PWR_FLAG") (at 210.0 35.0 0) (unit 1) (body_style 1) (exclude_from_sim no) (in_bom yes) (on_board yes) (in_pos_files yes) (dnp no) (fields_autoplaced yes) (uuid "779432e8-aabc-4f17-a4d5-3e6cc227e476") 
+(symbol (lib_id "power:PWR_FLAG") (at 210.0 35.0 0) (unit 1) (body_style 1) (exclude_from_sim no) (in_bom yes) (on_board yes) (in_pos_files yes) (dnp no) (fields_autoplaced yes) (uuid "b260b074-85ca-4cb5-9e0a-47a1b98ba30a") 
 
 (property "Reference" "#FLG10" (at 149.86 27.94 0) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27)))) 
 
@@ -3160,8 +3162,6 @@
 
 (property "Datasheet" "" (at 149.86 35.56 0) (hide yes) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27)))) 
 
-(property "Description" "" (at 149.86 35.56 0) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27)))) (pin "1" (uuid "85f30747-dfe4-4c56-a3a4-40900c1cd601")) (instances (project "kicad_experiment" (path "/03389c2d-7850-4c4f-bc2b-cfe91ca6b516" (reference "#FLG7") (unit 1))))) 
+(property "Description" "" (at 149.86 35.56 0) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27)))) (pin "1" (uuid "12f36cf3-d40d-41e1-9862-39825314ed71")) (instances (project "kicad_experiment" (path "/03389c2d-7850-4c4f-bc2b-cfe91ca6b516" (reference "#FLG7") (unit 1))))) 
 
-(label "VSYS_MCU" (at 210.0 35.0 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "f63a96d0-54f9-49c8-b72a-3bc1ae849cb7")) 
-
-(label "TH4_REF" (at 234.95 248.92 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "b0fb5bbc-dc52-4802-a0c3-6c00c2080df4")))
+(label "VSYS_MCU" (at 210.0 35.0 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "ca80cdd4-cf99-43a2-9bd5-4788b062f470")))

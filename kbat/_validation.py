@@ -1,32 +1,33 @@
-"""Phase 1 validation harness — the four hard-gate criteria.
+"""Phase 1 validation harness — the hard-gate criteria.
 
-The 4 criteria from spec §9 / gate [[9qP6PTTxu4B90lFQxjrHX]]:
+The criteria from spec §9 / gate [[9qP6PTTxu4B90lFQxjrHX]], plus 1.G.e:
 
   1.G.a  LOC                       — cleanup.kbat.yaml ≤ 80% of cleanup.py
   1.G.b  Functional equivalence    — kbat apply ≡ cleanup.py on load-bearing fields
   1.G.c  Idempotence               — second apply is a byte-exact no-op
   1.G.d  Readable diff             — kbat plan emits ≥3 op-keywords
+  1.G.e  KiCad 10 fidelity         — apply drops no body_style / in_pos_files /
+                                     lib_symbols entries
 
-Criterion 1.G.b is the **functional-equivalence** refinement (2026-05-17)
-of the earlier sexpdata tree-equivalence approach (which itself was a
-refinement of the original byte-identity goal). Spike
-[[mdL7Q1hutGWX7vvrxHvD6]] established that byte-identity is impossible
-because kicad-sch-api and kicad-skip use incompatible canonical text
-formats. Phase 1 E then established that even sexpdata tree-equivalence
-fails because kicad-sch-api 0.5.5 silently prunes KiCad-10 attributes
-(`body_style`, `in_pos_files`) and orphan `lib_symbols` definitions
-that kicad-skip preserves verbatim.
+Criterion 1.G.b compares LOAD-BEARING facts that matter for schematic
+editing (components + properties, labels + positions, no-connects,
+footprints, power flags) rather than bytes, because cleanup.py
+(kicad-skip) and kbat (akcli) serialise differently. Its reference is
+``expected_cleanup_output.kicad_sch``: cleanup.py's output on the vendored
+pre-cleanup board, generated once (2026-10-17) and vendored so the gate
+never executes cleanup.py. (Until then the gate ran cleanup.py live; its
+path patch never matched the vendored path, so cleanup.py edited the
+author's real board and the gate compared against an untouched copy of an
+already-cleaned fixture.)
 
-The refined criterion compares LOAD-BEARING facts that matter for
-schematic editing (components + properties, labels + positions,
-no-connects, footprints, power flags) and explicitly ignores
-NON-LOAD-BEARING differences (orphan lib_symbols, per-symbol
-``body_style`` / ``in_pos_files`` attributes, whitespace).
+One declared difference is normalised in 1.G.b: kbat grid-snaps
+``add_pwr_flag`` positions to 1.27 mm (ROADMAP Appendix A Flag #1) and
+cleanup.py does not, so power-flag positions, and labels co-located with
+a power flag, are compared after snapping to the grid.
 
-Refinement provenance: user decision via /znote:implement orchestrator
-on 2026-05-17, after Phase 1 E ([[zCVaA0x_qdBZBvvS25phm]]) empirical
-evidence. v0.5 should revisit strict tree-equivalence once kicad-sch-api
-gains KiCad-10 support upstream.
+KiCad 10 fields are no longer ignored: kbat moved from kicad-sch-api
+(which dropped them on save) to akcli (which edits in place), and 1.G.e
+checks they survive.
 
 Run via ``python -m kbat._validation --criteria all`` (exits non-zero on
 any failure) or via the wrapper ``scripts/validate_phase1.sh``.
@@ -58,11 +59,12 @@ EXPERIMENT_DIR = Path(
     os.environ.get("KBAT_VALIDATION_FIXTURE_DIR", _FIXTURE_DIR_DEFAULT)
 )
 SRC_SCH = EXPERIMENT_DIR / "kicad_experiment.kicad_sch"
+EXPECTED_SCH = EXPERIMENT_DIR / "expected_cleanup_output.kicad_sch"
 PY_SCRIPT = EXPERIMENT_DIR / "cleanup.py"
 KBAT_MANIFEST = EXPERIMENT_DIR / "cleanup.kbat.yaml"
-PY_VENV_PYTHON = Path(
-    os.environ.get("KBAT_VALIDATION_PY_INTERPRETER", sys.executable)
-)
+
+#: KiCad's 0.05 in schematic grid; kbat snaps add_pwr_flag positions to it.
+GRID_MM = 1.27
 
 # Positional tolerance: round to 0.01 mm. The schematic stores coordinates
 # at 0.0001 mm precision but cleanup.py routinely uses ``round(x, 2)`` and
@@ -70,9 +72,9 @@ PY_VENV_PYTHON = Path(
 # key for set membership while preserving observable position semantics.
 COORD_PRECISION = 2
 
-# Per-symbol attributes that kicad-sch-api 0.5.5 does not preserve on save
-# (KiCad-10 schema extensions). Both kbat and the cleanup.py output may
-# differ on these; we explicitly ignore them in the functional check.
+# Per-symbol KiCad-10 schema extensions. The old kicad-sch-api backend
+# dropped them on save, so the functional check (1.G.b) ignores them;
+# criterion 1.G.e now checks separately that none are lost.
 KICAD10_LOSSY_ATTRS = frozenset({"body_style", "in_pos_files"})
 
 # Property fields we consider load-bearing for component equivalence. Every
@@ -355,24 +357,24 @@ def criterion_loc() -> bool:
 # ---- criterion 1.G.b: functional equivalence --------------------------------
 
 
-def _run_cleanup_py_against(work_dir: Path) -> Path:
-    """Copy schematic + cleanup.py to ``work_dir``, patch path, run."""
-    sch_copy = work_dir / "kicad_experiment.kicad_sch"
-    py_copy = work_dir / "cleanup.py"
-    shutil.copy2(SRC_SCH, sch_copy)
-    shutil.copy2(PY_SCRIPT, py_copy)
-    # Patch the SCH constant in the script copy
-    txt = py_copy.read_text(encoding="utf-8")
-    txt = txt.replace(str(SRC_SCH), str(sch_copy))
-    py_copy.write_text(txt, encoding="utf-8")
-    subprocess.run(
-        [str(PY_VENV_PYTHON), str(py_copy)],
-        check=True,
-        capture_output=True,
-        text=True,
-        cwd=work_dir,
+def _snap(v: float) -> float:
+    return round(round(v / GRID_MM) * GRID_MM, COORD_PRECISION)
+
+
+def _grid_snap_power_flags(facts: FunctionalFacts) -> FunctionalFacts:
+    """Snap power flags, and labels sitting on one, to the 1.27 mm grid."""
+    flag_points = set(facts.power_flags)
+    labels = frozenset(
+        (net, _snap(x), _snap(y)) if (x, y) in flag_points else (net, x, y)
+        for net, x, y in facts.labels
     )
-    return sch_copy
+    return FunctionalFacts(
+        components=facts.components,
+        labels=labels,
+        no_connects=facts.no_connects,
+        power_flags=frozenset((_snap(x), _snap(y)) for x, y in facts.power_flags),
+        footprint_assignments=facts.footprint_assignments,
+    )
 
 
 def _run_kbat_apply_against(work_dir: Path) -> Path:
@@ -386,36 +388,36 @@ def _run_kbat_apply_against(work_dir: Path) -> Path:
 
 
 def _criterion_functional_equivalence_with_msg() -> tuple[bool, str]:
-    """Refined per Phase 1 E user decision (2026-05-17): functional
-    equivalence on load-bearing fields (components, labels, NCs, power
-    flags, footprints) rather than full sexpdata tree-equivalence.
-
-    Non-load-bearing differences (orphan lib_symbols, KiCad-10
-    body_style/in_pos_files attributes, whitespace) are explicitly
-    normalized out because kicad-sch-api 0.5.5 does not preserve them.
+    """Functional equivalence on load-bearing fields (components, labels,
+    NCs, power flags, footprints) between kbat's output and the vendored
+    cleanup.py output, after the declared power-flag grid snap.
 
     Returns (ok, msg).
     """
     with tempfile.TemporaryDirectory(prefix="kbat_val_b_") as td:
-        td_path = Path(td)
-        py_dir = td_path / "py"
-        kbat_dir = td_path / "kbat"
-        py_dir.mkdir()
-        kbat_dir.mkdir()
         try:
-            py_out = _run_cleanup_py_against(py_dir)
-        except subprocess.CalledProcessError as e:
-            return False, f"cleanup.py crashed: {e.stderr or e.stdout}"
-        try:
-            kbat_out = _run_kbat_apply_against(kbat_dir)
+            kbat_out = _run_kbat_apply_against(Path(td))
         except Exception as e:  # noqa: BLE001
             return False, f"kbat apply crashed: {e!r}"
-        ok, msg = functional_equivalence_check(py_out, kbat_out)
-        size_msg = (
-            f"py_bytes={py_out.stat().st_size} "
-            f"kbat_bytes={kbat_out.stat().st_size}"
+        expected = _grid_snap_power_flags(extract_functional_facts(EXPECTED_SCH))
+        actual = _grid_snap_power_flags(extract_functional_facts(kbat_out))
+        diffs = [
+            _diff_sets(name, getattr(expected, name), getattr(actual, name))
+            for name in (
+                "components",
+                "labels",
+                "no_connects",
+                "power_flags",
+                "footprint_assignments",
+            )
+            if getattr(expected, name) != getattr(actual, name)
+        ]
+        if diffs:
+            return False, "; ".join(diffs)
+        return True, (
+            f"equivalent: {len(actual.components)} components, {len(actual.labels)} labels, "
+            f"{len(actual.no_connects)} no-connects, {len(actual.power_flags)} power flags"
         )
-        return ok, f"{msg} ({size_msg})"
 
 
 def criterion_functional_equivalence() -> bool:
@@ -471,8 +473,18 @@ OP_KEYWORDS = ("set_property", "no_connect", "footprint", "snap", "label", "pwr_
 
 def _criterion_readable_diff_with_msg() -> tuple[bool, str]:
     """``kbat plan`` must emit structured op-naming output. Returns (ok, msg)."""
+    # --schematic: the manifest names the author's real board; plan the
+    # vendored copy so the gate is portable and never reads it.
     result = subprocess.run(
-        ["uv", "run", "kbat", "plan", str(KBAT_MANIFEST)],
+        [
+            sys.executable,
+            "-m",
+            "kbat.cli.main",
+            "plan",
+            str(KBAT_MANIFEST),
+            "--schematic",
+            str(SRC_SCH),
+        ],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -501,13 +513,47 @@ def criterion_readable_diff() -> bool:
     return ok
 
 
+# ---- criterion 1.G.e: KiCad 10 fidelity -------------------------------------
+
+
+def _criterion_kicad10_fidelity_with_msg() -> tuple[bool, str]:
+    """Applying the manifest must not drop KiCad 10 per-symbol attributes
+    or embedded lib_symbols. Returns (ok, msg)."""
+    from kbat.backend import FieldCounts
+
+    before = FieldCounts.of(SRC_SCH)
+    with tempfile.TemporaryDirectory(prefix="kbat_val_e_") as td:
+        after = FieldCounts.of(_run_kbat_apply_against(Path(td)))
+    lost = [
+        f"{name} {getattr(before, name)}->{getattr(after, name)}"
+        for name in ("body_style", "in_pos_files", "lib_symbols")
+        if getattr(after, name) < getattr(before, name)
+    ]
+    if lost:
+        return False, "dropped: " + ", ".join(lost)
+    return True, (
+        f"kept body_style={after.body_style} in_pos_files={after.in_pos_files} "
+        f"lib_symbols={after.lib_symbols}"
+    )
+
+
+def criterion_kicad10_fidelity() -> bool:
+    """Criterion 1.G.e — apply drops no KiCad 10 fields.
+
+    Boolean wrapper for ``tests/gate/test_validation_gate.py``.
+    """
+    ok, _ = _criterion_kicad10_fidelity_with_msg()
+    return ok
+
+
 # ---- driver -----------------------------------------------------------------
 
 CRITERIA = {
     "a": ("LOC", _criterion_loc_with_msg),
-    "b": ("Functional equivalence (refined)", _criterion_functional_equivalence_with_msg),
+    "b": ("Functional equivalence", _criterion_functional_equivalence_with_msg),
     "c": ("Idempotence", _criterion_idempotence_with_msg),
     "d": ("Readable diff", _criterion_readable_diff_with_msg),
+    "e": ("KiCad 10 fidelity", _criterion_kicad10_fidelity_with_msg),
 }
 
 
@@ -535,16 +581,16 @@ def run_criteria(which: list[str]) -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Phase 1 validation harness — the 4 hard-gate criteria."
+        description="Phase 1 validation harness — the hard-gate criteria."
     )
     p.add_argument(
         "--criteria",
         default="all",
-        help="comma-separated subset of a,b,c,d (default: all)",
+        help="comma-separated subset of a,b,c,d,e (default: all)",
     )
     args = p.parse_args()
     if args.criteria == "all":
-        which = ["a", "b", "c", "d"]
+        which = ["a", "b", "c", "d", "e"]
     else:
         which = [s.strip() for s in args.criteria.split(",") if s.strip()]
     return run_criteria(which)

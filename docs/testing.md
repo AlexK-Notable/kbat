@@ -89,19 +89,24 @@ When a property test surfaces a bug:
 **Status**: shipped in v0.1.1 (Phase 2.3). Flag #1 was the canonical
 test: Phase 2.4 fixed `add_pwr_flag`, re-widened the Hypothesis
 strategy, and removed the `# HYPOTHESIS_MASK: Flag #1` annotation
-atomically. Flag #5 (Hypothesis runtime budgets at scale) remains open
-and is annotated `# HYPOTHESIS_MASK: Flag #5` on the
-`PROPERTY_SETTINGS.suppress_health_check` line.
+atomically. Flag #5 (Hypothesis runtime budgets at scale) closed in the
+2026-10 move to the akcli backend: the property tests now compile
+primitives against an in-memory board state instead of saving files, so
+`PROPERTY_SETTINGS` no longer suppresses health checks and no
+`HYPOTHESIS_MASK` tokens remain.
 
 ## 7.3.5 Mock policy (precise version)
 
-- **Banned, hard-fail**: any `unittest.mock.patch` or `mock.patch`
-  targeting `kicad_sch_api` or its dependencies. `scripts/check_mock_policy.py`
-  greps for `mock\.patch.*kicad_sch_api` and `from kicad_sch_api`
-  alongside any `MagicMock`. Currently 0 violations.
-- **Banned, hard-fail**: any patching of `pcbnew`, `kicad-cli`
-  subprocess invocations, or `.kicad_sch` file content. The schematic
-  IS the unit of behavior; mocking it tests nothing.
+- **Banned, hard-fail**: any `unittest.mock` use (`mock.patch`,
+  `patch.object`, `MagicMock`) without a `# MOCK_EXEMPT:` annotation
+  within three lines. `scripts/check_mock_policy.py` enforces this.
+  Currently 0 violations.
+- **Banned**: faking the backend. Tests that touch files run the real
+  `akcli` subprocess against tmp-path copies of real fixtures; the
+  schematic IS the unit of behavior, so mocking it tests nothing. The
+  one indirection allowed is `KBAT_AKCLI` pointing at a logging shim
+  that still `exec`s real akcli (`tests/test_ops_basic.py`, used to
+  prove a converged manifest makes no `draw` call).
 - **Permitted, with explicit annotation**: monkey-patching of stdlib
   I/O primitives (`os.replace`, `os.fsync`) for the express purpose of
   fault injection in safety/recovery tests. These sites are
@@ -109,12 +114,10 @@ and is annotated `# HYPOTHESIS_MASK: Flag #5` on the
   `# MOCK_EXEMPT: fault-injection for crash-recovery`. v0.5 evaluates
   replacing them with a `FaultInjector` wrapper that simulates `EIO`
   deterministically without touching the syscall namespace.
-- **Permitted, with explicit annotation**: duck-typed substitutes for
-  kicad-sch-api objects in dispatcher unit tests
-  (`tests/test_runner.py:_FakeComponent` etc.) that test routing logic,
-  not schematic mutation. These are explicit Python classes, not `Mock`
-  instances, and must be annotated
-  `# DUCK_FAKE: tests dispatcher routing, not schematic mutation`.
+- **No longer needed**: duck-typed component fakes. Dispatcher unit
+  tests in `tests/test_runner.py` now build a real in-memory
+  `kbat.backend.BoardState`; the single remaining `# DUCK_FAKE`
+  site is a spoofed transform object for the unknown-op error path.
 
 A `scripts/check_mock_policy.py` CI lint enforces the annotations. Both
 lint scripts shipped in v0.1.1 (Phase 2.3) and run in the `gate` GHA
