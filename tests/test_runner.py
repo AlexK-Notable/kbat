@@ -28,6 +28,7 @@ from kbat.schema.v1alpha1 import (
     RefSelector,
     SetPropertyTransform,
 )
+from tests.conftest import REAL_SCHEMATIC
 
 # ---- fixtures ---------------------------------------------------------------
 
@@ -198,9 +199,7 @@ def test_real_manifest_loads() -> None:
     ``Manifest.model_validate``, so a malformed YAML file would fail
     here with a YAML parse error before schema validation ever runs.
     """
-    real = Path("/home/komi/notes/kicad/kicad_experiment/cleanup.kbat.yaml")
-    if not real.exists():
-        pytest.skip("cleanup.kbat.yaml not present (run from clean checkout)")
+    real = REAL_SCHEMATIC.parent / "cleanup.kbat.yaml"
     m = load_manifest(real)
     assert m.apiVersion == "kbat.dev/v1alpha1"
     assert m.kind == "Project"

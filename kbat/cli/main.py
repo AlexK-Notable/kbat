@@ -67,10 +67,11 @@ def plan(
 ) -> None:
     """Show what would change if this manifest were applied.
 
-    Phase 2: emits a semantic diff via :func:`kbat._planner.compute_plan`
-    rendered as Rich tables. Each transform is classified as a
-    would-change, no-op, or error; an aggregate FunctionalFacts delta
-    is shown when fact extraction succeeds.
+    Runs the manifest against a temporary copy of the schematic and
+    lists each transform as would-change, no-op or error, followed by
+    the net renames/merges/splits akcli reports and a before/after
+    summary of components, labels, no-connects and footprints. The
+    schematic itself is never written. Exits 1 if any transform errors.
     """
     from kbat._planner import compute_plan, render_plan
 

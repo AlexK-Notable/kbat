@@ -34,3 +34,12 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent worktrees and local scratch
+.claude/
+
+# kbat / akcli state written next to a schematic
+.kbat-lock
+.kbat-state.json
+.kbat-snapshots/
+.akcli/

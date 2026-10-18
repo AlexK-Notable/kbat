@@ -32,7 +32,7 @@ class _StrictBase(BaseModel):
 
 class ProjectMetadata(_StrictBase):
     name: str
-    schematic: str  # absolute path to .kicad_sch
+    schematic: str  # path to .kicad_sch; relative paths resolve against the manifest's directory
 
 
 class FileSignature(_StrictBase):
