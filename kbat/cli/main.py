@@ -45,6 +45,10 @@ def apply(
     )
     for d in result.details:
         typer.echo(f"  - [{d.status}] {d.id} ({d.op})")
+    if result.net_changes:
+        typer.echo("Net changes:")
+        for line in result.net_changes:
+            typer.echo(f"  {line}")
     if result.errors:
         for e in result.errors:
             typer.echo(f"  ERROR: {e}", err=True)

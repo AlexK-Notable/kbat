@@ -1,8 +1,10 @@
-"""Manifest loader + transform dispatcher for `kbat apply`.
+"""Manifest loader + transform compiler/applier for `kbat apply`.
 
 Owned by Phase 1 Agent E; extended by Phase 2 Agent G with safety
-primitives from :mod:`kbat._safety` (atomic write, `.kbat-lock`,
-`.kbat-state.json` signature tracking, pre-apply snapshots for rollback).
+primitives from :mod:`kbat._safety` (`.kbat-lock`, `.kbat-state.json`
+signature tracking, pre-apply snapshots for rollback); moved onto the
+akcli backend (:mod:`kbat.backend`) so writes no longer lose KiCad 10
+data.
 
 Apply flow with safety on:
 
@@ -12,24 +14,28 @@ Apply flow with safety on:
    schematic sha256 matches (unless ``force_resignature``)
 3. If ``.kbat-state.json`` exists, refuse if any tracked file drifted
    (unless ``force``)
-4. Snapshot the schematic into ``.kbat-snapshots/{sha256}.kicad_sch``
-5. Dispatch transforms in-memory
-6. Save via :func:`kbat._safety.atomic_write_file` (kicad-sch-api writes
-   to a tmp path; we atomically rename to the target)
-7. Record the new (post-apply) signature into ``.kbat-state.json``
+4. Read the board state and compile every transform against it, in order
+5. If the compiled op-list is empty, the manifest is already applied:
+   nothing is snapshotted, written or recorded
+6. Snapshot the schematic into ``.kbat-snapshots/{sha256}.kicad_sch``
+7. Apply the whole op-list in one ``akcli draw --apply`` (akcli writes
+   snapshot -> temp -> verify -> replace, so the batch is atomic)
+8. Fidelity guard (:mod:`kbat.backend.fidelity`): if the write dropped
+   KiCad 10 fields or flattened a moved label, restore the snapshot and
+   report the error
+9. Record the new (post-apply) signature into ``.kbat-state.json``
    alongside the snapshot pointer so ``kbat rollback`` can restore.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from kbat import ops
+from kbat import backend, ops
 from kbat._safety import (
     DriftDetectedError,
     KbatLock,
@@ -38,11 +44,12 @@ from kbat._safety import (
     make_snapshot,
     verify_pinned_signature,
 )
+from kbat.ops.schematic import Op
 from kbat.schema.v1alpha1 import ApplyResult, DetailEntry, Manifest
 
 
 class UnknownTransformError(Exception):
-    """Raised when a transform's `op` field has no registered dispatcher."""
+    """Raised when a transform's `op` field has no registered compiler."""
 
 
 def load_manifest(manifest_path: Path | str) -> Manifest:
@@ -62,86 +69,32 @@ def resolve_schematic_path(manifest: Manifest, manifest_path: Path) -> Path:
     return (manifest_path.parent / p).resolve()
 
 
-def _save_with_relaxed_validation(sch: Any, file_path: Path) -> None:
-    """Save a kicad-sch-api Schematic after relaxing its reference validator.
+def dispatch_transform(state: backend.BoardState, transform: Any) -> list[Op]:
+    """Compile one transform against ``state``; returns its backend ops.
 
-    Required because ``kicad-sch-api`` 0.5.5 hard-fails ``save()`` on
-    KiCad references containing underscores (e.g. ``U_MCU``) that
-    cleanup.py's underlying kicad-skip parser accepts. The
-    :func:`kbat.ops.schematic.relax_validation` helper widens the
-    per-instance regex.
-    """
-    from kbat.ops.schematic import relax_validation
-
-    relax_validation(sch)
-    sch.save(str(file_path))
-
-
-def _atomic_save_schematic(sch: Any, file_path: Path) -> None:
-    """Save the schematic crash-safely.
-
-    kicad-sch-api 0.5.5's ``save()`` writes directly to the path you
-    give it. To get tmp+fsync+rename semantics we (a) save to a temp
-    file in the same directory (same filesystem → cross-fs rename
-    can't happen), (b) publish via :func:`atomic_write_file`, which
-    does the fsync + ``os.replace`` dance.
-    """
-    file_path = Path(file_path)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    # Same-dir tmp keeps the rename inside one filesystem.
-    fd, tmp_str = tempfile.mkstemp(
-        prefix=f".{file_path.name}.kbat-save-",
-        suffix=".tmp",
-        dir=str(file_path.parent),
-    )
-    os.close(fd)
-    tmp = Path(tmp_str)
-    try:
-        _save_with_relaxed_validation(sch, tmp)
-        atomic_write_file(tmp, file_path)
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
-
-
-def dispatch_transform(sch: Any, transform: Any) -> bool:
-    """Apply a single transform to the schematic.
-
-    Returns True if the schematic was mutated.
+    An empty list means the target state already holds (no-op). ``state``
+    is updated to reflect the returned ops.
     """
     op_name = transform.op
     if op_name == "set_property":
         return ops.set_property(
-            sch,
-            transform.selector.reference,
-            transform.property,
-            transform.value,
+            state, transform.selector.reference, transform.property, transform.value
         )
     if op_name == "add_no_connect":
-        return ops.add_no_connect(sch, transform.reference, transform.pins)
+        return ops.add_no_connect(state, transform.reference, transform.pins)
     if op_name == "snap_labels_to_pins":
         return ops.snap_labels_to_pins(
-            sch,
-            transform.reference,
-            transform.mapping,
-            tolerance_mm=transform.tolerance_mm,
+            state, transform.reference, transform.mapping, tolerance_mm=transform.tolerance_mm
         )
     if op_name == "assign_footprints":
-        return ops.assign_footprints(sch, transform.by_lib_id)
+        return ops.assign_footprints(state, transform.by_lib_id)
     if op_name == "delete_label_at":
         return ops.delete_label_at(
-            sch,
-            transform.net,
-            transform.x,
-            transform.y,
-            tolerance_mm=transform.tolerance_mm,
+            state, transform.net, transform.x, transform.y, tolerance_mm=transform.tolerance_mm
         )
     if op_name == "move_label":
         return ops.move_label(
-            sch,
+            state,
             transform.net,
             transform.from_x,
             transform.from_y,
@@ -150,8 +103,37 @@ def dispatch_transform(sch: Any, transform: Any) -> bool:
             tolerance_mm=transform.tolerance_mm,
         )
     if op_name == "add_pwr_flag":
-        return ops.add_pwr_flag(sch, transform.net, transform.x, transform.y)
+        return ops.add_pwr_flag(state, transform.net, transform.x, transform.y)
     raise UnknownTransformError(f"unknown op: {op_name!r}")
+
+
+@dataclass
+class CompiledManifest:
+    """A manifest compiled against one board state."""
+
+    ops: list[Op] = field(default_factory=list)
+    details: list[DetailEntry] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    state: backend.BoardState | None = None
+
+
+def compile_manifest(manifest: Manifest, state: backend.BoardState) -> CompiledManifest:
+    """Compile every transform in order against ``state`` (mutated)."""
+    out = CompiledManifest(state=state)
+    for transform in manifest.transforms:
+        op_name = transform.op
+        tid = getattr(transform, "id", None) or op_name
+        try:
+            emitted = dispatch_transform(state, transform)
+        except Exception as e:  # noqa: BLE001
+            out.errors.append(f"{tid}: {e}")
+            out.details.append(DetailEntry(id=tid, op=op_name, status="error", error=str(e)))
+            continue
+        out.ops.extend(emitted)
+        out.details.append(
+            DetailEntry(id=tid, op=op_name, status="applied" if emitted else "skipped")
+        )
+    return out
 
 
 def _resolve_project_dir(sch_path: Path) -> Path:
@@ -160,7 +142,8 @@ def _resolve_project_dir(sch_path: Path) -> Path:
     Sidecars (``.kbat-lock``, ``.kbat-state.json``, ``.kbat-snapshots/``)
     live next to the schematic itself, not next to the manifest — manifest
     placement is flexible, but a KiCad project's sidecars belong with the
-    schematic so they travel together.
+    schematic so they travel together. akcli keeps its own ``.akcli/``
+    workspace (backups, journal) in the same directory.
     """
     return Path(sch_path).resolve().parent
 
@@ -173,19 +156,16 @@ def run(
     force: bool = False,
     force_resignature: bool = False,
 ) -> ApplyResult:
-    """Load manifest, open schematic, dispatch all transforms, save.
+    """Load manifest, read the schematic, compile all transforms, apply.
 
     Args:
         manifest_path: path to a .kbat.yaml manifest
-        dry_run: if True, do not save the schematic, do not snapshot,
-            do not update state
+        dry_run: if True, compile only: do not write, snapshot or update state
         schematic_override: if provided, target this schematic file instead
             of the one named in the manifest (useful for tmpdir harnesses)
         force: bypass drift detection against ``.kbat-state.json``
         force_resignature: bypass ``pinned_signature`` verification
     """
-    import kicad_sch_api as ksa
-
     manifest_p = Path(manifest_path)
     manifest = load_manifest(manifest_p)
 
@@ -199,7 +179,6 @@ def run(
     # On a dry run we skip the lock entirely — no mutation, no sidecars.
     if dry_run:
         return _run_inner(
-            ksa,
             sch_path,
             manifest,
             project_dir,
@@ -210,7 +189,6 @@ def run(
 
     with KbatLock(project_dir, mode="apply"):
         return _run_inner(
-            ksa,
             sch_path,
             manifest,
             project_dir,
@@ -221,7 +199,6 @@ def run(
 
 
 def _run_inner(
-    ksa: Any,
     sch_path: Path,
     manifest: Manifest,
     project_dir: Path,
@@ -248,56 +225,50 @@ def _run_inner(
             if drifted:
                 raise DriftDetectedError(drifted)
 
-    # --- pre-apply snapshot ----------------------------------------------
-    snapshot_rel = ""
-    if not dry_run and sch_path.exists():
-        snapshot_rel, _pre_sha = make_snapshot(sch_path, project_dir)
+    # --- compile -----------------------------------------------------------
+    compiled = compile_manifest(manifest, backend.read_state(sch_path))
+    result = ApplyResult(
+        applied=sum(1 for d in compiled.details if d.status == "applied"),
+        skipped=sum(1 for d in compiled.details if d.status == "skipped"),
+        errors=list(compiled.errors),
+        details=list(compiled.details),
+    )
+    if dry_run or compiled.errors or not compiled.ops:
+        # Nothing to write: dry run, a transform failed to compile, or the
+        # manifest is already applied (converged — the file is untouched).
+        return result
 
-    # --- dispatch --------------------------------------------------------
-    sch = ksa.load_schematic(str(sch_path))
+    # --- snapshot + apply + fidelity guard ----------------------------------
+    snapshot_rel, _pre_sha = make_snapshot(sch_path, project_dir)
+    before = backend.FieldCounts.of(sch_path)
+    try:
+        drawn = backend.draw(sch_path, compiled.ops, apply=True)
+        backend.check_field_counts(before, backend.FieldCounts.of(sch_path))
+        backend.check_moved_labels(sch_path, compiled.state.moves if compiled.state else [])
+    except backend.FidelityError as e:
+        atomic_write_file(project_dir / snapshot_rel, sch_path)
+        result.errors.append(f"fidelity: {e} (schematic restored from {snapshot_rel})")
+        return result
+    except backend.BackendError as e:
+        # akcli writes atomically, so a refused or failed draw leaves the
+        # schematic untouched; drop the snapshot nobody will reference.
+        _discard_snapshot(project_dir, snapshot_rel)
+        hint = f" ({e.remediation})" if e.remediation else ""
+        result.errors.append(f"backend: {e}{hint}")
+        return result
 
-    applied = 0
-    skipped = 0
-    details: list[DetailEntry] = []
-    errors: list[str] = []
+    result.net_changes = drawn.net_changes
+    new_state = KbatState.load(project_dir) or KbatState()
+    new_state.record(project_dir, sch_path, snapshot_path=snapshot_rel)
+    new_state.save(project_dir)
+    return result
 
-    for transform in manifest.transforms:
-        op_name = transform.op
-        tid = getattr(transform, "id", None) or op_name
-        try:
-            changed = dispatch_transform(sch, transform)
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"{tid}: {e}")
-            details.append(
-                DetailEntry(id=tid, op=op_name, status="error", error=str(e))
-            )
-            continue
-        if changed:
-            applied += 1
-            details.append(DetailEntry(id=tid, op=op_name, status="applied"))
-        else:
-            skipped += 1
-            details.append(DetailEntry(id=tid, op=op_name, status="skipped"))
 
-    # --- save + record signature -----------------------------------------
-    if not dry_run and not errors:
-        _atomic_save_schematic(sch, sch_path)
-        new_state = KbatState.load(project_dir) or KbatState()
-        new_state.record(project_dir, sch_path, snapshot_path=snapshot_rel)
-        new_state.save(project_dir)
-    elif not dry_run and errors and snapshot_rel:
-        # Snapshot was created BEFORE dispatch; dispatch errored before
-        # we could record the pointer in .kbat-state.json. Without
-        # cleanup the snapshot is an orphan — present on disk, but no
-        # state-file entry references it (so rollback can't find it
-        # and the user just sees `.kbat-snapshots/` slowly bloat).
-        # Best-effort unlink: if the cleanup itself fails, swallow the
-        # secondary error so the primary apply failure is not masked.
-        try:
-            orphan = project_dir / snapshot_rel
-            if orphan.exists():
-                orphan.unlink()
-        except OSError:
-            pass
-
-    return ApplyResult(applied=applied, skipped=skipped, errors=errors, details=details)
+def _discard_snapshot(project_dir: Path, snapshot_rel: str) -> None:
+    """Best-effort removal of a snapshot no state-file entry references."""
+    try:
+        orphan = project_dir / snapshot_rel
+        if orphan.exists():
+            orphan.unlink()
+    except OSError:
+        pass

@@ -1,9 +1,11 @@
-"""Schematic primitive operations on a loaded :class:`kicad_sch_api.Schematic`.
+"""Schematic primitives, compiled against a :class:`~kbat.backend.state.BoardState`.
 
-Owned by Phase 1 Agent D (primitives + Pydantic schema). Each primitive
-returns ``True`` if it mutated the schematic, ``False`` if the schematic
-was already in the target state (idempotent no-op). Idempotence is the
-load-bearing contract for the Phase 1 hard gate criterion 1.G.c.
+Each primitive reads the state, returns the list of akcli op dicts needed
+to reach its target (empty list = already in the target state, i.e. an
+idempotent no-op), and updates the state to reflect those ops so later
+transforms in the same manifest see them. Idempotence is decided here,
+against what the file actually contains, not by the backend: a manifest
+that is already applied compiles to no ops at all.
 
 Reference enumeration (cleanup.py sections):
 
@@ -17,402 +19,297 @@ Reference enumeration (cleanup.py sections):
 
 Section E (collision detection) is read-only and not a primitive.
 
-Backend caveat (KiCad 10): the upstream ``kicad-sch-api`` 0.5.5 legacy
-validator rejects reference designators containing underscores (e.g.
-``U_MCU``) as ``ERROR``, blocking :meth:`Schematic.save`. The exported
-helper :func:`relax_validation` widens the regex on a per-instance basis;
-the runner should call it once after :func:`Schematic.load` and before
-the first apply. This is documented as a Phase 1 backend gap; upstream
-fix tracked in the phase note.
+Backend note: akcli has no label-move op, so a move compiles to
+``delete_object`` (matched by name + exact position) followed by
+``add_net_label``. :mod:`kbat.backend.fidelity` checks after the write
+that each moved label kept its formatting.
 """
 
 from __future__ import annotations
 
 import math
-import re
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:  # pragma: no cover
-    from kicad_sch_api import Schematic
+from kbat.backend.akcli import to_mil
+from kbat.backend.state import BoardState, Component, Label
 
+Op = dict[str, Any]
 
-# ---- backend compat ---------------------------------------------------------
-
-
-# Permissive reference pattern: accept upstream's grammar plus underscores
-# (e.g. ``U_MCU``) and arbitrary digit/letter tails. Mirrors the shape of
-# upstream's regex but loosens the body class.
-_PERMISSIVE_REF_RE = re.compile(r"^(#[A-Z]+[0-9]+|[A-Z][A-Z0-9_]*[A-Z0-9]?|[A-Z]+\?)$")
-
-
-# KiCad standard editing grid (0.05 in = 1.27 mm). All component and
-# wire endpoints in a KiCad schematic are expected to lie on integer
-# multiples of this. ``kicad-sch-api`` 0.5.6 snaps PWR_FLAG *component*
-# positions to this grid on insert but does NOT snap label positions,
-# which produces an off-grid offset of up to ~0.6 mm between the flag
-# and its co-located label and breaks the :func:`add_pwr_flag`
-# idempotence check (tolerance 0.5 mm). Pre-snapping the caller's
-# ``(x, y)`` before storing fixes this end-to-end. See ROADMAP
-# Appendix A Flag #1.
+# KiCad standard editing grid (0.05 in = 1.27 mm). PWR_FLAG positions
+# are snapped to it so the flag and its co-located label land on the same
+# on-grid point (akcli also snaps placements to this 50-mil grid). See
+# ROADMAP Appendix A Flag #1.
 KICAD_GRID_MM = 1.27
 
 
 def _snap_to_grid(value: float, grid: float = KICAD_GRID_MM) -> float:
-    """Snap a single coordinate to the nearest integer multiple of ``grid``.
-
-    Used by :func:`add_pwr_flag` to align caller-supplied ``(x, y)`` to
-    the KiCad 1.27 mm grid before storing the flag component and label,
-    so the idempotence check (and visual layout) is grid-stable on
-    arbitrary float input. Round-half-to-even via :func:`round`.
-    """
-    return round(value / grid) * grid
-
-
-def relax_validation(sch: Schematic) -> None:
-    """Loosen the per-instance reference validator on ``sch``.
-
-    Required because ``kicad-sch-api`` 0.5.5 hard-fails ``save()`` on
-    valid KiCad references that contain underscores. Safe to call
-    multiple times.
-    """
-    legacy = getattr(sch, "_legacy_validator", None)
-    if legacy is not None:
-        legacy._valid_reference_pattern = _PERMISSIVE_REF_RE
+    """Snap a single coordinate to the nearest integer multiple of ``grid``."""
+    return round(round(value / grid) * grid, 4)
 
 
 # ---- internal helpers -------------------------------------------------------
 
 
-def _pin_xy(sch: Schematic, reference: str, pin_number: str) -> tuple[float, float] | None:
-    """Return ``(x, y)`` of pin ``pin_number`` on ``reference``, or None."""
-    pos = sch.get_component_pin_position(reference, str(pin_number))
-    if pos is None:
+def _pin_xy(state: BoardState, reference: str, pin_number: str) -> tuple[float, float] | None:
+    comp = state.components.get(reference)
+    if comp is None:
         return None
-    return float(pos.x), float(pos.y)
+    return comp.pins.get(str(pin_number))
 
 
-def _label_xy(label: Any) -> tuple[float, float]:
-    """Return ``(x, y)`` of a label's :class:`Point` position."""
-    p = label.position
-    return float(p.x), float(p.y)
+def _move_label(
+    state: BoardState, lab: Label, to_at: str | list[int | float], to_xy: tuple[float, float]
+) -> list[Op]:
+    """Ops moving ``lab`` to ``to_at``; updates ``lab`` and logs the move."""
+    ops: list[Op] = [
+        {
+            "op": "delete_object",
+            "match": {"kind": "label", "name": lab.name, "at": [to_mil(lab.x), to_mil(lab.y)]},
+        },
+        {
+            "op": "add_net_label",
+            "name": lab.name,
+            "at": to_at,
+            "scope": "local",
+            "rotation": int(lab.rotation),
+        },
+    ]
+    lab.x, lab.y = to_xy
+    state.moves.append((lab.name, to_xy[0], to_xy[1], lab.effects))
+    return ops
 
 
-def _component_xy(comp: Any) -> tuple[float, float]:
-    p = comp.position
-    return float(p.x), float(p.y)
-
-
-def _find_labels_near(
-    sch: Schematic, net: str, x: float, y: float, tolerance: float
-) -> list[Any]:
-    """Return labels whose text equals ``net`` and centred within ``tolerance``."""
-    out: list[Any] = []
-    for lab in sch.labels:
-        if lab.text != net:
-            continue
-        lx, ly = _label_xy(lab)
-        if abs(lx - x) <= tolerance and abs(ly - y) <= tolerance:
-            out.append(lab)
-    return out
-
-
-def _next_flag_number(sch: Schematic) -> int:
-    """Return the next free ``#FLGN`` integer (1 if none exist)."""
+def _next_flag_number(state: BoardState) -> int:
     used: set[int] = set()
-    for comp in sch.components:
-        ref = comp.reference
-        if not ref.startswith("#FLG"):
-            continue
-        try:
-            used.add(int(ref[4:]))
-        except ValueError:
-            continue
+    for ref in state.components:
+        if ref.startswith("#FLG"):
+            try:
+                used.add(int(ref[4:]))
+            except ValueError:
+                continue
     return (max(used) + 1) if used else 1
 
 
 # ---- primitives -------------------------------------------------------------
 
 
-def set_property(sch: Schematic, reference: str, property: str, value: str) -> bool:
+def set_property(state: BoardState, reference: str, property: str, value: str) -> list[Op]:
     """Set ``property`` on component ``reference`` to ``value``.
 
-    Returns ``True`` if the property was changed, ``False`` if it already
-    held ``value`` (idempotent no-op) or the component does not exist.
-
-    Implementation note: ``kicad-sch-api`` 0.5.5's
-    :meth:`Component.set_property` updates the property dict in memory
-    but does NOT propagate to the synced ``.value`` / ``.footprint``
-    attributes nor to the serialised output of :meth:`Schematic.save`.
-    The reliable mutation path is direct attribute assignment for the
-    three canonical properties; ``set_property`` is reserved for custom
-    properties not surfaced as attributes.
+    No ops if the property already holds ``value`` or the component does
+    not exist.
     """
-    comp = sch.components.get(reference)
-    if comp is None:
-        return False
+    comp = state.components.get(reference)
+    if comp is None or comp.properties.get(property) == value:
+        return []
+    op: Op = {"op": "set_component_parameters", "designator": reference}
     if property == "Value":
-        if comp.value == value:
-            return False
-        comp.value = value
-        return True
-    if property == "Footprint":
-        if comp.footprint == value:
-            return False
-        comp.footprint = value
-        return True
+        op["value"] = value
+    elif property == "Footprint":
+        op["footprint"] = value
+    elif property == "Reference":
+        op["new_designator"] = value
+    else:
+        op["parameters"] = {property: value}
+    comp.properties[property] = value
     if property == "Reference":
-        if comp.reference == value:
-            return False
+        del state.components[reference]
         comp.reference = value
-        return True
-    # Fallback for arbitrary properties (Datasheet, Description, custom).
-    prop = comp.get_property(property)
-    current = prop.get("value") if isinstance(prop, dict) else prop
-    if current == value:
-        return False
-    comp.set_property(property, value)
-    return True
+        state.components[value] = comp
+    return [op]
 
 
-def add_no_connect(sch: Schematic, reference: str, pins: list[int | str]) -> bool:
+def add_no_connect(state: BoardState, reference: str, pins: list[int | str]) -> list[Op]:
     """Drop no-connect markers on the listed pins of ``reference``.
 
-    Idempotent: existing NC markers at any pin endpoint (within 0.05 mm)
-    are detected and skipped.
+    Pins that already carry a marker (within 0.05 mm), whoever placed it,
+    are skipped; unknown pins are skipped.
     """
-    changed = False
+    ops: list[Op] = []
     for pin_id in pins:
-        xy = _pin_xy(sch, reference, str(pin_id))
-        if xy is None:
+        xy = _pin_xy(state, reference, str(pin_id))
+        if xy is None or state.no_connect_near(*xy, tolerance=0.05):
             continue
-        if sch.no_connects.find_at_position(xy, tolerance=0.05):
-            continue
-        sch.no_connects.add(xy)
-        changed = True
-    return changed
+        ops.append({"op": "add_no_connect", "pin": f"{reference}.{pin_id}"})
+        state.no_connects.append(xy)
+    return ops
 
 
 def snap_label_to_pin(
-    sch: Schematic,
+    state: BoardState,
     reference: str,
     pin: str | int,
     net: str,
     max_distance_mm: float = 25.0,
-) -> bool:
-    """Snap one existing ``net`` label onto the endpoint of ``reference``/``pin``.
+) -> list[Op]:
+    """Snap the nearest ``net`` label onto ``reference``/``pin``.
 
-    No-op if a label with text ``net`` is already at the pin position
-    (within 0.01 mm) or if no unclaimed candidate exists within
-    ``max_distance_mm``. Returns ``True`` iff a label was moved.
+    No ops if a ``net`` label is already at the pin (within 0.01 mm) or no
+    candidate lies within ``max_distance_mm``.
     """
-    xy = _pin_xy(sch, reference, str(pin))
+    xy = _pin_xy(state, reference, str(pin))
     if xy is None:
-        return False
+        return []
     px, py = xy
-    # Already aligned?
-    if _find_labels_near(sch, net, px, py, tolerance=0.01):
-        return False
-    # Find the nearest matching label
-    best: tuple[float, Any] | None = None
-    for lab in sch.labels:
-        if lab.text != net:
-            continue
-        lx, ly = _label_xy(lab)
-        d = math.hypot(lx - px, ly - py)
-        if best is None or d < best[0]:
-            best = (d, lab)
-    if best is None or best[0] > max_distance_mm:
-        return False
-    best[1].move(px, py)
-    return True
+    if state.labels_near(net, px, py, tolerance=0.01):
+        return []
+    cands = [(math.hypot(lab.x - px, lab.y - py), lab) for lab in state.labels if lab.name == net]
+    if not cands:
+        return []
+    d, lab = min(cands, key=lambda c: c[0])
+    if d > max_distance_mm:
+        return []
+    return _move_label(state, lab, f"{reference}.{pin}", (px, py))
 
 
 def snap_labels_to_pins(
-    sch: Schematic,
+    state: BoardState,
     reference: str,
     mapping: dict[str | int, str],
     tolerance_mm: float = 25.0,
-) -> bool:
+) -> list[Op]:
     """Snap many ``{pin: net}`` labels to pin endpoints in one pass.
 
     Two-pass to match cleanup.py section D: (1) claim labels already
-    exactly at their pin, (2) for each remaining pin, snap the nearest
+    exactly at their pin, (2) for each remaining pin, move the nearest
     unclaimed candidate within ``tolerance_mm``. This prevents the same
     GND/+3V3 label from being moved across multiple pins on the same net.
-
-    Returns ``True`` if any label was moved.
     """
-    used: set[str] = set()
-
-    # Pre-resolve all pin positions for the mapping.
-    pin_targets: list[tuple[str, str, float, float]] = []  # (pin, net, x, y)
+    used: set[int] = set()
+    pin_targets: list[tuple[str, str, float, float]] = []
     for pin_num, net in mapping.items():
-        xy = _pin_xy(sch, reference, str(pin_num))
-        if xy is None:
-            continue
-        pin_targets.append((str(pin_num), net, xy[0], xy[1]))
+        xy = _pin_xy(state, reference, str(pin_num))
+        if xy is not None:
+            pin_targets.append((str(pin_num), net, xy[0], xy[1]))
 
-    # Pass 1: claim already-aligned labels so they cannot be reassigned.
     for _, net, px, py in pin_targets:
-        for lab in sch.labels:
-            if lab.uuid in used or lab.text != net:
+        for lab in state.labels:
+            if id(lab) in used or lab.name != net:
                 continue
-            lx, ly = _label_xy(lab)
-            if abs(lx - px) < 0.01 and abs(ly - py) < 0.01:
-                used.add(lab.uuid)
+            if abs(lab.x - px) < 0.01 and abs(lab.y - py) < 0.01:
+                used.add(id(lab))
                 break
 
-    # Pass 2: snap nearest unclaimed candidate within tolerance.
-    changed = False
-    for _, net, px, py in pin_targets:
-        if _find_labels_near(sch, net, px, py, tolerance=0.01):
-            continue  # already aligned (claimed above)
-        best: tuple[float, Any] | None = None
-        for lab in sch.labels:
-            if lab.uuid in used or lab.text != net:
-                continue
-            lx, ly = _label_xy(lab)
-            d = math.hypot(lx - px, ly - py)
-            if best is None or d < best[0]:
-                best = (d, lab)
-        if best is None or best[0] > tolerance_mm:
+    ops: list[Op] = []
+    for pin_num, net, px, py in pin_targets:
+        if state.labels_near(net, px, py, tolerance=0.01):
             continue
-        best[1].move(px, py)
-        used.add(best[1].uuid)
-        changed = True
-    return changed
+        cands = [
+            (math.hypot(lab.x - px, lab.y - py), lab)
+            for lab in state.labels
+            if id(lab) not in used and lab.name == net
+        ]
+        if not cands:
+            continue
+        d, lab = min(cands, key=lambda c: c[0])
+        if d > tolerance_mm:
+            continue
+        ops.extend(_move_label(state, lab, f"{reference}.{pin_num}", (px, py)))
+        used.add(id(lab))
+    return ops
 
 
-def assign_footprints(sch: Schematic, by_lib_id: dict[str, str]) -> bool:
-    """Bulk-assign footprints to every component matching each ``lib_id``.
+def assign_footprints(state: BoardState, by_lib_id: dict[str, str]) -> list[Op]:
+    """Assign footprints to every component matching each ``lib_id``.
 
-    Skips virtual ``power:*`` symbols (which have no footprint). Idempotent
-    per-component: returns ``True`` only if at least one component's
-    footprint actually changed.
+    Skips virtual ``power:*`` symbols and components already carrying the
+    target footprint.
     """
-    changed = False
-    for comp in sch.components:
-        lib_id = comp.lib_id
-        if lib_id.startswith("power:"):
+    ops: list[Op] = []
+    for comp in state.components.values():
+        if comp.lib_id.startswith("power:"):
             continue
-        new_fp = by_lib_id.get(lib_id)
-        if new_fp is None:
+        new_fp = by_lib_id.get(comp.lib_id)
+        if new_fp is None or comp.footprint == new_fp:
             continue
-        if comp.footprint == new_fp:
-            continue
-        comp.footprint = new_fp
-        changed = True
-    return changed
+        ops.append(
+            {"op": "set_component_parameters", "designator": comp.reference, "footprint": new_fp}
+        )
+        comp.properties["Footprint"] = new_fp
+    return ops
 
 
 def delete_label_at(
-    sch: Schematic, net: str, x: float, y: float, tolerance_mm: float = 0.05
-) -> bool:
-    """Delete the label with text ``net`` at ``(x, y)`` ±``tolerance_mm``.
+    state: BoardState, net: str, x: float, y: float, tolerance_mm: float = 0.05
+) -> list[Op]:
+    """Delete the ``net`` label at ``(x, y)`` ±``tolerance_mm``.
 
-    Returns ``True`` iff a matching label was found and removed.
-    Idempotent: if no match exists (already deleted), returns ``False``.
+    The lookup uses the tolerance; the emitted delete names the label's
+    exact file position. No ops if no label matches.
     """
-    matches = _find_labels_near(sch, net, x, y, tolerance_mm)
+    matches = state.labels_near(net, x, y, tolerance_mm)
     if not matches:
-        return False
-    sch.labels.remove(matches[0].uuid)
-    return True
+        return []
+    lab = matches[0]
+    state.labels.remove(lab)
+    return [
+        {
+            "op": "delete_object",
+            "match": {"kind": "label", "name": net, "at": [to_mil(lab.x), to_mil(lab.y)]},
+        }
+    ]
 
 
 def move_label(
-    sch: Schematic,
+    state: BoardState,
     net: str,
     from_x: float,
     from_y: float,
     to_x: float,
     to_y: float,
     tolerance_mm: float = 0.05,
-) -> bool:
+) -> list[Op]:
     """Move the ``net`` label at ``from_*`` to ``to_*``.
 
-    Idempotent: if the label is already at ``to_*`` (within
-    ``tolerance_mm``), returns ``False``. If neither location holds a
-    matching label, also returns ``False``.
+    No ops if a ``net`` label is already at ``to_*`` or none is at ``from_*``.
     """
-    # Already at the target? → idempotent no-op.
-    if _find_labels_near(sch, net, to_x, to_y, tolerance_mm):
-        return False
-    matches = _find_labels_near(sch, net, from_x, from_y, tolerance_mm)
+    if state.labels_near(net, to_x, to_y, tolerance_mm):
+        return []
+    matches = state.labels_near(net, from_x, from_y, tolerance_mm)
     if not matches:
-        return False
-    matches[0].move(to_x, to_y)
-    return True
+        return []
+    return _move_label(state, matches[0], [to_mil(to_x), to_mil(to_y)], (to_x, to_y))
 
 
 def add_pwr_flag(
-    sch: Schematic, net: str, x: float, y: float, tolerance_mm: float = 0.5
-) -> bool:
-    """Add a ``power:PWR_FLAG`` component plus the ``net`` label at ``(x, y)``.
+    state: BoardState, net: str, x: float, y: float, tolerance_mm: float = 0.5
+) -> list[Op]:
+    """Add a ``power:PWR_FLAG`` plus a ``net`` label at the grid-snapped ``(x, y)``.
 
-    Idempotent: if a PWR_FLAG component and a matching net label already
-    co-exist near the requested position (within
-    ``tolerance_mm + KICAD_GRID_MM`` to absorb the grid snap), returns
-    ``False``. Otherwise allocates the next free ``#FLGN`` reference and
-    adds both the flag component and the label at the grid-snapped
-    position.
-
-    Off-grid ``(x, y)`` is snapped to the nearest ``KICAD_GRID_MM``
-    (1.27 mm) multiple BEFORE the component insert and the label
-    insert. This is required because ``kicad-sch-api`` 0.5.6 silently
-    snaps PWR_FLAG component positions to a KiCad-internal grid on
-    insert but does NOT snap label positions; a caller-supplied
-    off-grid coordinate would therefore store the flag on-grid and the
-    label off-grid, producing an offset that breaks the idempotence
-    tolerance and the visual layout. Snapping the input ourselves
-    keeps the flag and label co-located on the grid. See ROADMAP
-    Appendix A Flag #1.
-
-    The idempotence-search window is widened by ``KICAD_GRID_MM`` to
-    absorb the snap delta — an existing flag+label placed via an
-    earlier call (or hand-placed near the request) is still recognised
-    even when the snap shifts our target by up to half a grid unit
-    relative to the unsnapped caller coordinate.
+    No ops if a PWR_FLAG with a co-located ``net`` label already exists
+    near the request. The search window is widened by ``KICAD_GRID_MM`` so
+    a flag placed at the snapped point (or hand-placed near the unsnapped
+    one) is recognised. See ROADMAP Appendix A Flag #1.
     """
-    # Snap caller-supplied coordinates to the KiCad grid so the flag
-    # component and its co-located label end up at the same point —
-    # without this the kicad-sch-api auto-snap on the component would
-    # drift it off the label by up to ~0.6 mm.
-    sx = _snap_to_grid(x)
-    sy = _snap_to_grid(y)
-    # Widened idempotence window: covers BOTH the snapped target and
-    # any existing flag/label placed at (or near) the unsnapped caller
-    # coordinate. Without this, snapping would always insert a fresh
-    # flag adjacent to a pre-existing one rather than treating it as
-    # the same logical placement.
+    sx, sy = _snap_to_grid(x), _snap_to_grid(y)
     search_tol = tolerance_mm + KICAD_GRID_MM
-    # Idempotence check: PWR_FLAG + matching label near the request?
-    for comp in sch.components:
+    for comp in state.components.values():
         if comp.lib_id != "power:PWR_FLAG":
             continue
-        cx, cy = _component_xy(comp)
-        if abs(cx - sx) > search_tol or abs(cy - sy) > search_tol:
+        if abs(comp.x - sx) > search_tol or abs(comp.y - sy) > search_tol:
             continue
-        if _find_labels_near(sch, net, cx, cy, search_tol):
-            return False
-    next_n = _next_flag_number(sch)
-    sch.components.add(
-        lib_id="power:PWR_FLAG",
-        reference=f"#FLG{next_n}",
-        value="PWR_FLAG",
-        position=(sx, sy),
+        if state.labels_near(net, comp.x, comp.y, search_tol):
+            return []
+    at = [to_mil(sx), to_mil(sy)]
+    ref = f"#FLG{_next_flag_number(state)}"
+    state.components[ref] = Component(
+        reference=ref, lib_id="power:PWR_FLAG", properties={"Value": "PWR_FLAG"}, x=sx, y=sy
     )
-    sch.add_label(net, position=(sx, sy))
-    return True
+    state.labels.append(Label(name=net, x=sx, y=sy))
+    return [
+        {"op": "place_pwr_flag", "at": at, "rotation": 0},
+        {"op": "add_net_label", "name": net, "at": at, "scope": "local", "rotation": 0},
+    ]
 
 
 __all__ = [
+    "KICAD_GRID_MM",
+    "Op",
     "add_no_connect",
     "add_pwr_flag",
     "assign_footprints",
     "delete_label_at",
     "move_label",
-    "relax_validation",
     "set_property",
     "snap_label_to_pin",
     "snap_labels_to_pins",

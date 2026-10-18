@@ -34,9 +34,9 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
+from kbat import backend
 from kbat._runner import dispatch_transform, load_manifest, resolve_schematic_path
 from kbat._validation import FunctionalFacts, extract_functional_facts
-from kbat.ops.schematic import relax_validation
 from kbat.schema.v1alpha1 import Manifest
 
 # ---- data classes -----------------------------------------------------------
@@ -75,6 +75,8 @@ class PlanDiff:
     entries: list[PlanEntry] = field(default_factory=list)
     initial_facts: FunctionalFacts | None = None
     final_facts: FunctionalFacts | None = None
+    #: akcli's net-diff summary of the simulated write.
+    net_changes: list[str] = field(default_factory=list)
 
     @property
     def n_change(self) -> int:
@@ -155,11 +157,11 @@ def compute_plan(
 ) -> PlanDiff:
     """Simulate a manifest against its target schematic.
 
-    Loads the manifest, opens the schematic into a tmp-copy (never
-    touches the original), dispatches each transform, and records
-    whether it would-change or no-op. Also captures FunctionalFacts
-    before any transform and after all transforms so callers can
-    surface a high-level functional delta.
+    Reads the board state, compiles each transform against it and
+    records whether it would-change or no-op. The compiled op-list is
+    then applied to an isolated tmp-copy (the original is never touched)
+    so FunctionalFacts after all transforms, and akcli's net-diff lines,
+    describe exactly what ``kbat apply`` would write.
 
     Args:
         manifest_path: path to a .kbat.yaml manifest.
@@ -169,8 +171,6 @@ def compute_plan(
     Returns:
         :class:`PlanDiff` carrying entries + initial/final facts.
     """
-    import kicad_sch_api as ksa
-
     manifest_p = Path(manifest_path)
     manifest: Manifest = load_manifest(manifest_p)
 
@@ -191,24 +191,23 @@ def compute_plan(
             # still useful.
             diff.initial_facts = None
 
-    # Simulate against an isolated tmp-copy so the on-disk file is
-    # never touched. We open the schematic via kicad-sch-api just like
-    # the runner does (so dispatch_transform's expectations hold).
+    # Compile against the state read from the original (read-only), then
+    # apply the op-list to an isolated tmp-copy for the post-state facts.
     with tempfile.TemporaryDirectory(prefix="kbat_plan_") as td:
         if sch_path.exists():
             tmp_sch = Path(td) / sch_path.name
             shutil.copy2(sch_path, tmp_sch)
-            sch = ksa.load_schematic(str(tmp_sch))
-            relax_validation(sch)
+            state = backend.read_state(tmp_sch)
         else:
             # Plan can still proceed: each transform error becomes a row.
             tmp_sch = None
-            sch = None
+            state = None
+        compiled_ops: list[dict] = []
 
         for idx, transform in enumerate(manifest.transforms, start=1):
             tid = getattr(transform, "id", None) or transform.op
             summary = _transform_summary(transform)
-            if sch is None:
+            if state is None:
                 diff.entries.append(
                     PlanEntry(
                         index=idx,
@@ -221,7 +220,7 @@ def compute_plan(
                 )
                 continue
             try:
-                changed = dispatch_transform(sch, transform)
+                emitted = dispatch_transform(state, transform)
             except Exception as e:  # noqa: BLE001
                 diff.entries.append(
                     PlanEntry(
@@ -240,19 +239,21 @@ def compute_plan(
                     id=tid,
                     op=transform.op,
                     summary=summary,
-                    status="change" if changed else "noop",
+                    status="change" if emitted else "noop",
                 )
             )
+            compiled_ops.extend(emitted)
 
-        # After all transforms run on the tmp copy, save it (so the
-        # final facts reflect the post-state shape that kicad-sch-api
-        # would actually serialise) and re-extract facts.
-        if sch is not None and tmp_sch is not None:
-            try:
-                sch.save(str(tmp_sch))
-                diff.final_facts = extract_functional_facts(tmp_sch)
-            except Exception:  # noqa: BLE001
-                diff.final_facts = None
+        if tmp_sch is not None:
+            if compiled_ops and not diff.n_error:
+                try:
+                    drawn = backend.draw(tmp_sch, compiled_ops, apply=True)
+                    diff.net_changes = drawn.net_changes
+                    diff.final_facts = extract_functional_facts(tmp_sch)
+                except Exception:  # noqa: BLE001
+                    diff.final_facts = None
+            else:
+                diff.final_facts = diff.initial_facts
 
     return diff
 
@@ -304,6 +305,11 @@ def render_plan(diff: PlanDiff, *, console: Console | None = None) -> None:
         f"[green]{diff.n_noop} no-op[/green], "
         f"[red]{diff.n_error} error[/red]"
     )
+
+    if diff.net_changes:
+        console.print("[bold]Net changes[/bold] (akcli):", markup=True)
+        for line in diff.net_changes:
+            console.print(f"  {line}", markup=False)
 
     if diff.initial_facts is not None and diff.final_facts is not None:
         delta = _facts_delta(diff.initial_facts, diff.final_facts)
