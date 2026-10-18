@@ -1,23 +1,85 @@
 # kbat
 
+[![ci](https://github.com/AlexK-Notable/kbat/actions/workflows/ci.yml/badge.svg)](https://github.com/AlexK-Notable/kbat/actions/workflows/ci.yml)
+
 A CLI batch tool for KiCad schematic transforms. Declarative,
 manifest-driven, idempotent.
 
 ## Status
 
-v0.1.0.dev0 — pre-release. Schema: `kbat.dev/v1alpha1`.
+v0.1.0.dev0 — pre-release, not published on PyPI. Schema:
+`kbat.dev/v1alpha1`. Requires Python 3.11+; tested on Linux only.
 
 ## Install
 
 ```bash
-uv tool install kbat
+uv tool install git+https://github.com/AlexK-Notable/kbat
 ```
 
-Fallback:
+or `pipx install git+https://github.com/AlexK-Notable/kbat`. The file
+backend, [akcli-kicad](https://pypi.org/project/akcli-kicad/), installs
+from PyPI with it. KiCad itself is not needed to run kbat, but a symbol
+that a transform adds (`add_pwr_flag`) must be embedded in the schematic
+or resolvable from a KiCad library.
+
+## Quick start
+
+Write a manifest next to your schematic, e.g. `board.kbat.yaml`:
+
+```yaml
+apiVersion: kbat.dev/v1alpha1
+kind: Project
+metadata:
+  name: my-board
+  schematic: board.kicad_sch   # relative to this manifest
+
+transforms:
+  - id: r1-value
+    op: set_property
+    selector: {reference: R1}
+    property: Value
+    value: 10k
+
+  - id: smd-footprints
+    op: assign_footprints
+    by_lib_id:
+      Device:R: Resistor_SMD:R_0402_1005Metric
+      Device:C: Capacitor_SMD:C_0402_1005Metric
+
+  - id: r2-labels
+    op: snap_labels_to_pins
+    reference: R2
+    mapping: {"1": VCC, "2": GND}
+```
+
+Then, in that directory:
 
 ```bash
-pipx install kbat
+kbat plan board.kbat.yaml    # what would change, incl. net renames; writes nothing
+kbat apply board.kbat.yaml   # apply; prints applied/skipped per transform
+kbat apply board.kbat.yaml   # again: applied=0 skipped=3, file untouched
+kbat rollback                # restore the snapshot taken before the last apply
 ```
+
+Commit your schematic to git before applying; kbat's own undo is one
+step deep (see "Known limitations").
+
+## Transforms
+
+| `op` | What it does |
+|------|--------------|
+| `set_property` | Set `Value`, `Footprint`, `Reference` or any custom field on one symbol (`selector: {reference: ...}`) |
+| `assign_footprints` | Set the footprint of every symbol whose `lib_id` is in `by_lib_id` (power symbols are skipped) |
+| `add_no_connect` | Put no-connect markers on the listed `pins` of `reference`; pins that already have one are left alone |
+| `snap_labels_to_pins` | Move each net label in `mapping` (pin → net) onto that pin of `reference`, if within `tolerance_mm` (default 25) |
+| `move_label` | Move the `net` label at `from_x, from_y` to `to_x, to_y` (mm) |
+| `delete_label_at` | Delete the `net` label at `x, y` (mm) |
+| `add_pwr_flag` | Place a `PWR_FLAG` on `net` at `x, y` (mm), snapped to KiCad's 1.27 mm grid |
+
+Transforms run in order, each seeing the result of the ones before it.
+Every transform takes an optional `id`. The full schema is
+`kbat/schema/v1alpha1.py`; a real 143-line manifest is
+`tests/fixtures/validation_gate/cleanup.kbat.yaml`.
 
 ## What it does
 
@@ -73,9 +135,10 @@ field-tested across diverse KiCad designs.
 
 ## Design rationale
 
-The full implementation plan and design rationale lives in the
-project's z-note knowledge base. The entry point is the plan hub
-note: `0izyKtvZr5EthRrpD7Yqn`.
+`docs/ROADMAP.md` covers the plan, the evidence behind it and open
+questions; `docs/testing.md` covers the test strategy. IDs such as
+`[[0izyKtvZr5EthRrpD7Yqn]]` in docs and docstrings refer to the author's
+private design notes and can be ignored.
 
 ## Supported KiCad versions
 

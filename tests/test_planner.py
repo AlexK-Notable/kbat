@@ -9,9 +9,10 @@ Covers:
     * :func:`render_plan` produces output that mentions ``would change``,
       ``no-op``, and op-keywords (integration with Rich, no mocking).
 
-The tests use the real ``cleanup.kbat.yaml`` + ``kicad_experiment.kicad_sch``
-fixture (skipped if absent) — consistent with ``test_ops_basic.py``'s
-"no mock-theater" stance from the testing-strategy note.
+The tests use the vendored ``cleanup.kbat.yaml`` + pre-cleanup
+``kicad_experiment.kicad_sch`` under ``tests/fixtures/validation_gate/``
+— consistent with ``test_ops_basic.py``'s "no mock-theater" stance from
+the testing-strategy note.
 """
 
 from __future__ import annotations
@@ -29,9 +30,10 @@ from kbat._planner import (
     compute_plan,
     render_plan,
 )
+from tests.conftest import REAL_SCHEMATIC
 
-SRC_SCH = Path("/home/komi/notes/kicad/kicad_experiment/kicad_experiment.kicad_sch")
-MANIFEST = Path("/home/komi/notes/kicad/kicad_experiment/cleanup.kbat.yaml")
+SRC_SCH = REAL_SCHEMATIC
+MANIFEST = REAL_SCHEMATIC.parent / "cleanup.kbat.yaml"
 
 # Op-keywords the Phase 2 gate (check 2.11) greps for, lower-cased.
 OP_KEYWORDS = ("set_property", "no_connect", "footprint", "snap", "label", "pwr_flag")

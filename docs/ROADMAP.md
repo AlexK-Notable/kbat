@@ -29,7 +29,7 @@ remain on the original calendar budget).
 
 | Dimension | State |
 |---|---|
-| Repo | `/home/komi/repos/kbat`, MIT, greenfield |
+| Repo | [github.com/AlexK-Notable/kbat](https://github.com/AlexK-Notable/kbat) (public since 2026-10-17), MIT |
 | Schema namespace | `kbat.dev/v1alpha1` (locked; bumps reserved for v0.5+) |
 | CLI | `kbat apply | plan | rollback | unlock` shipped (`rollback` fully integration-tested in v0.1.1, this release; `unlock` added in v0.1.1 to resolve Flag #6 cross-host lock recovery); `validate` `lint` `diff` `recipes` `manifest upgrade` `doctor` not yet |
 | Schematic primitives | 7 of ~25 planned: `set_property`, `add_no_connect`, `snap_labels_to_pins`, `assign_footprints`, `delete_label_at`, `move_label`, `add_pwr_flag` (Flag #1 resolved in v0.1.1: grid-snapped + Hypothesis re-widened) |

@@ -4,7 +4,7 @@ apiVersion: kbat.dev/v1alpha1
 kind: Project
 metadata:
   name: kicad_experiment
-  schematic: /home/komi/notes/kicad/kicad_experiment/kicad_experiment.kicad_sch
+  schematic: kicad_experiment.kicad_sch
 
 transforms:
 
